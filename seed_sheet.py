@@ -123,6 +123,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--creds", required=True,
                         help="Path to Google service account JSON file")
+    parser.add_argument("--sheet-id", default=None,
+                        help="Existing Google Sheet ID to write into (open by ID)")
     args = parser.parse_args()
 
     print(f"\n🚀 Seeding Google Sheet: '{GSHEET_NAME}'")
@@ -132,14 +134,18 @@ def main():
     client = gspread.authorize(creds)
 
     # Open or create workbook
-    try:
-        wb = client.open(GSHEET_NAME)
-        print(f"✓ Opened existing workbook: {GSHEET_NAME}")
-    except gspread.SpreadsheetNotFound:
-        wb = client.create(GSHEET_NAME)
-        print(f"✓ Created new workbook: {GSHEET_NAME}")
-        # Share with your personal Google account so you can view it
-        print("  ⚠  Share this sheet with your Google account manually in Drive.")
+    if args.sheet_id:
+        wb = client.open_by_key(args.sheet_id)
+        print(f"✓ Opened workbook by ID: {args.sheet_id}")
+    else:
+        try:
+            wb = client.open(GSHEET_NAME)
+            print(f"✓ Opened existing workbook: {GSHEET_NAME}")
+        except gspread.SpreadsheetNotFound:
+            wb = client.create(GSHEET_NAME)
+            print(f"✓ Created new workbook: {GSHEET_NAME}")
+            # Share with your personal Google account so you can view it
+            print("  ⚠  Share this sheet with your Google account manually in Drive.")
 
     print("\n── Setting up worksheets ─────────────────────────────")
 
