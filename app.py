@@ -162,12 +162,13 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Master Ledger",
     "🏦 Broker Recon",
     "🎯 Analytics",
     "⚠️ Alerts",
     "✏️ Trade Entry",
+    "📄 Export",
 ])
 
 
@@ -584,3 +585,213 @@ with tab5:
             st.caption(f"Could not load trade log: {e}")
     else:
         st.caption("Connect Google Sheets to see trade log (see SETUP.md).")
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 6 — EXPORT
+# ══════════════════════════════════════════════════════════════════
+with tab6:
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    st.subheader("📄 Export Portfolio Report")
+    st.caption("Downloads a formatted Excel workbook with all tabs. Open in Excel → File → Print → Save as PDF.")
+
+    def build_excel(port_df, summary, fx_rate, report_ccy) -> bytes:
+        wb = openpyxl.Workbook()
+
+        # ── Styles ────────────────────────────────────────────────
+        hdr_font    = Font(bold=True, color="FFFFFF", size=11)
+        hdr_fill    = PatternFill("solid", fgColor="1F3864")
+        alt_fill    = PatternFill("solid", fgColor="EEF2F7")
+        title_font  = Font(bold=True, size=13)
+        border_side = Side(style="thin", color="CCCCCC")
+        thin_border = Border(bottom=border_side)
+        sym         = "HK$" if report_ccy == "HKD" else "$"
+
+        def style_header_row(ws, row_num, ncols):
+            for c in range(1, ncols + 1):
+                cell = ws.cell(row=row_num, column=c)
+                cell.font = hdr_font
+                cell.fill = hdr_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        def style_data_rows(ws, start_row, end_row, ncols):
+            for r in range(start_row, end_row + 1):
+                fill = alt_fill if r % 2 == 0 else None
+                for c in range(1, ncols + 1):
+                    cell = ws.cell(row=r, column=c)
+                    if fill:
+                        cell.fill = fill
+                    cell.border = thin_border
+                    cell.alignment = Alignment(vertical="center")
+
+        def autofit(ws, min_w=8, max_w=40):
+            for col in ws.columns:
+                max_len = max((len(str(cell.value or "")) for cell in col), default=0)
+                ws.column_dimensions[get_column_letter(col[0].column)].width = min(max(max_len + 2, min_w), max_w)
+
+        # ── Sheet 1: Summary ──────────────────────────────────────
+        ws1 = wb.active
+        ws1.title = "Portfolio Summary"
+        ws1.row_dimensions[1].height = 30
+
+        import datetime as _dt
+        hkt = _dt.timezone(_dt.timedelta(hours=8))
+        now_str = _dt.datetime.now(hkt).strftime("%Y-%m-%d %H:%M HKT")
+
+        summary_data = [
+            ["Project Apex 2035 — Portfolio Report", ""],
+            [f"Generated", now_str],
+            [f"Report Currency", report_ccy],
+            [f"FX Rate (USD/HKD)", f"{fx_rate:.4f}"],
+            ["", ""],
+            ["METRIC", "VALUE"],
+            ["Total Market Value", f"{sym}{summary['total_mv']:,.0f}"],
+            ["Total Cost Basis", f"{sym}{summary['total_cost']:,.0f}"],
+            ["Unrealized G/L", f"{sym}{summary['total_gl']:+,.0f}"],
+            ["G/L %", f"{summary['total_gl_pct']:+.2f}%"],
+            ["Number of Positions", summary["n_positions"]],
+            ["5x Target", f"{sym}{summary['target_5x']:,.0f}"],
+            ["% to 5x Target", f"{summary['pct_to_5x']:.1f}%"],
+            ["10x Target", f"{sym}{summary['target_10x']:,.0f}"],
+            ["% to 10x Target", f"{summary['pct_to_10x']:.1f}%"],
+        ]
+        for i, row in enumerate(summary_data, 1):
+            ws1.cell(i, 1, row[0])
+            ws1.cell(i, 2, row[1])
+        ws1.cell(1, 1).font = title_font
+        style_header_row(ws1, 6, 2)
+        style_data_rows(ws1, 7, len(summary_data), 2)
+        ws1.column_dimensions["A"].width = 28
+        ws1.column_dimensions["B"].width = 24
+
+        # ── Sheet 2: All Positions ────────────────────────────────
+        ws2 = wb.create_sheet("All Positions")
+        headers = ["Ticker", "Name", "Region", "Sector", "Barbell",
+                   "CCY", "Shares", "Avg Cost (Local)", "Live Price",
+                   f"MV ({report_ccy})", f"Cost ({report_ccy})",
+                   "G/L (USD)", "G/L %", "Held At", "Price Time"]
+        for c, h in enumerate(headers, 1):
+            ws2.cell(1, c, h)
+        style_header_row(ws2, 1, len(headers))
+        ws2.row_dimensions[1].height = 28
+
+        df_sorted = port_df.sort_values("mv_usd", ascending=False, na_position="last")
+        for r, (_, row) in enumerate(df_sorted.iterrows(), 2):
+            mv_r  = row["mv_report"]
+            cost_r = row["cost_usd"] * (fx_rate if report_ccy == "HKD" else 1) if row["cost_usd"] else None
+            ws2.cell(r, 1,  row["ticker"])
+            ws2.cell(r, 2,  row["name"])
+            ws2.cell(r, 3,  row["region"])
+            ws2.cell(r, 4,  row["sector"])
+            ws2.cell(r, 5,  row["barbell_class"])
+            ws2.cell(r, 6,  row["ccy"])
+            ws2.cell(r, 7,  row["shares"])
+            ws2.cell(r, 8,  row["cost_local"])
+            ws2.cell(r, 9,  row["live_price"])
+            ws2.cell(r, 10, mv_r)
+            ws2.cell(r, 11, cost_r)
+            ws2.cell(r, 12, row["gl_usd"])
+            ws2.cell(r, 13, f"{row['gl_pct']:+.1f}%" if row["gl_pct"] is not None and str(row["gl_pct"]) != "nan" else "—")
+            ws2.cell(r, 14, row["brokers"])
+            ws2.cell(r, 15, row["price_ts"])
+            # Number formats
+            for col in [7, 8, 9, 10, 11, 12]:
+                cell = ws2.cell(r, col)
+                if cell.value is not None:
+                    cell.number_format = '#,##0.00'
+        style_data_rows(ws2, 2, len(df_sorted) + 1, len(headers))
+        autofit(ws2)
+
+        # ── Sheet 3: By Broker ────────────────────────────────────
+        ws3 = wb.create_sheet("By Broker")
+        broker_headers = ["Broker", "Ticker", "Name", "Shares",
+                          "Avg Cost (Local)", "Live Price", f"MV ({report_ccy})"]
+        for c, h in enumerate(broker_headers, 1):
+            ws3.cell(1, c, h)
+        style_header_row(ws3, 1, len(broker_headers))
+        ws3.row_dimensions[1].height = 28
+
+        r = 2
+        for broker in BROKERS:
+            for _, row in df_sorted.iterrows():
+                b_detail = next((b for b in row["brokers_list"] if b["broker"] == broker), None)
+                if b_detail is None:
+                    continue
+                sh = b_detail["shares"]
+                lp = row["live_price"]
+                mv_here = None
+                if lp and sh:
+                    mv_local_h = sh * lp
+                    mv_usd_h   = mv_local_h / fx_rate if row["ccy"] == "HKD" else mv_local_h
+                    mv_here    = mv_usd_h * fx_rate if report_ccy == "HKD" else mv_usd_h
+                ws3.cell(r, 1, broker)
+                ws3.cell(r, 2, row["ticker"])
+                ws3.cell(r, 3, row["name"])
+                ws3.cell(r, 4, sh)
+                ws3.cell(r, 5, b_detail["avg_cost_local"])
+                ws3.cell(r, 6, lp)
+                ws3.cell(r, 7, mv_here)
+                for col in [4, 5, 6, 7]:
+                    cell = ws3.cell(r, col)
+                    if cell.value is not None:
+                        cell.number_format = '#,##0.00'
+                r += 1
+        style_data_rows(ws3, 2, r - 1, len(broker_headers))
+        autofit(ws3)
+
+        # ── Sheet 4: By Sector ────────────────────────────────────
+        ws4 = wb.create_sheet("By Sector")
+        alloc_h = ["Group", "Sector", "Ticker", "Name", f"MV ({report_ccy})", "% Portfolio"]
+        for c, h in enumerate(alloc_h, 1):
+            ws4.cell(1, c, h)
+        style_header_row(ws4, 1, len(alloc_h))
+        ws4.row_dimensions[1].height = 28
+
+        total_mv_usd = port_df["mv_usd"].sum()
+        df_sec = df_sorted[df_sorted["mv_usd"].notna()].copy()
+        r = 2
+        for barbell in ["CORE", "TACTICAL", "SPECULATIVE"]:
+            grp = df_sec[df_sec["barbell_class"] == barbell]
+            for _, row in grp.iterrows():
+                mv_r = row["mv_report"]
+                pct  = row["mv_usd"] / total_mv_usd * 100 if total_mv_usd else 0
+                ws4.cell(r, 1, barbell)
+                ws4.cell(r, 2, row["sector"])
+                ws4.cell(r, 3, row["ticker"])
+                ws4.cell(r, 4, row["name"])
+                ws4.cell(r, 5, mv_r)
+                ws4.cell(r, 6, f"{pct:.2f}%")
+                if ws4.cell(r, 5).value is not None:
+                    ws4.cell(r, 5).number_format = '#,##0'
+                r += 1
+        style_data_rows(ws4, 2, r - 1, len(alloc_h))
+        autofit(ws4)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    col_btn, col_info = st.columns([1, 2])
+    with col_btn:
+        if st.button("📥 Generate Excel Report", type="primary"):
+            xlsx_bytes = build_excel(port_df, summary, fx_rate, report_ccy)
+            st.download_button(
+                label="⬇️ Download Excel (.xlsx)",
+                data=xlsx_bytes,
+                file_name=f"Apex2035_Portfolio_{datetime.date.today()}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    with col_info:
+        st.markdown("""
+        **What's included:**
+        - **Sheet 1:** Portfolio Summary (totals, targets, FX)
+        - **Sheet 2:** All Positions — sorted by MV, all metrics
+        - **Sheet 3:** By Broker — every position per broker
+        - **Sheet 4:** By Sector/Barbell — allocation breakdown
+
+        **To save as PDF:** Open in Excel → File → Print → Microsoft Print to PDF
+        """)
