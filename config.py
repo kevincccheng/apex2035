@@ -456,12 +456,6 @@ INITIAL_POSITIONS = [
         "sector": "Tech — Robotics", "barbell_class": "SPECULATIVE", "ccy": "HKD",
         "brokers": [{"broker": "Moomoo", "shares": 50, "avg_cost_local": 133.30}],
     },
-    {
-        "ticker": "COST", "name": "Costco Wholesale", "region": "US",
-        "sector": "Consumer — Retail", "barbell_class": "CORE", "ccy": "USD",
-        "brokers": [{"broker": "Schwab", "shares": 100, "avg_cost_local": 995.75}],
-    },
-
     # ── SHORT CALLS (options) — negative shares = short position ─────
     # shares=-100 = 1 short contract; avg_cost_local = premium received per share
     {
