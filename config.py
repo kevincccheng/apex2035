@@ -376,7 +376,7 @@ INITIAL_POSITIONS = [
         "sector": "Infrastructure", "barbell_class": "TACTICAL", "ccy": "HKD",
         "brokers": [
             {"broker": "HSBC", "shares": 10000, "avg_cost_local": 39.96},
-            {"broker": "BOC",  "shares": 10000, "avg_cost_local": 0},
+            {"broker": "BOC",  "shares": 10000, "avg_cost_local": 45.00},
         ],
     },
     {
