@@ -1,8 +1,14 @@
 # core/prices.py — live price fetching via yfinance with caching
 import time
+import datetime
 import yfinance as yf
 import streamlit as st
 from config import TICKER_MAP, PRICE_CACHE_S
+
+_HKT = datetime.timezone(datetime.timedelta(hours=8))
+
+def _now_hkt():
+    return datetime.datetime.now(_HKT).strftime("%Y-%m-%d %H:%M HKT")
 
 # ── FX rate ───────────────────────────────────────────────────────
 @st.cache_data(ttl=PRICE_CACHE_S)
@@ -40,7 +46,7 @@ def get_price(ticker: str) -> dict:
             return {
                 "price":     round(float(price), 4),
                 "currency":  currency,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                "timestamp": _now_hkt(),
                 "error":     None,
             }
         # fallback: last close from history
@@ -49,7 +55,7 @@ def get_price(ticker: str) -> dict:
             return {
                 "price":     round(float(hist["Close"].iloc[-1]), 4),
                 "currency":  currency,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M") + " (prev close)",
+                "timestamp": _now_hkt() + " (prev close)",
                 "error":     None,
             }
     except Exception as e:
@@ -102,7 +108,7 @@ def get_prices_batch(tickers: tuple) -> dict:
                 results[orig] = {
                     "price":     round(price, 4),
                     "currency":  "HKD" if orig.endswith(".HK") else "USD",
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M"),
+                    "timestamp": _now_hkt(),
                     "error":     None,
                 }
             except Exception as e:

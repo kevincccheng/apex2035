@@ -226,7 +226,7 @@ with tab1:
         "Region":       df_view["region"],
         "Sector":       df_view["sector"],
         "Barbell":      df_view["barbell_class"],
-        "Shares":       df_view["shares"].apply(lambda x: f"{x:,.2f}" if x < 10 else f"{x:,.0f}"),
+        "Shares":       df_view["shares"].apply(lambda x: f"{x:,.4f}".rstrip('0').rstrip('.') if x % 1 != 0 else f"{x:,.0f}"),
         "Price (Local)":df_view.apply(fmt_price, axis=1),
         f"MV ({report_ccy})": df_view["mv_report"].apply(fmt_mv),
         f"Cost ({report_ccy})":df_view["cost_usd"].apply(
