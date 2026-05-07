@@ -29,6 +29,25 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# ── Password gate ─────────────────────────────────────────────────
+def check_password():
+    correct = st.secrets.get("app_password", "CHANGE_ME")
+    if st.session_state.get("authenticated"):
+        return True
+    st.title("📈 Apex 2035")
+    st.caption("Private portfolio dashboard — authorised access only.")
+    pwd = st.text_input("Password", type="password", key="pwd_input")
+    if st.button("Enter", type="primary"):
+        if pwd == correct:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+if not check_password():
+    st.stop()
+
 # ── Custom CSS ────────────────────────────────────────────────────
 st.markdown("""
 <style>
