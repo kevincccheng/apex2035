@@ -456,6 +456,27 @@ INITIAL_POSITIONS = [
         "sector": "Tech — Robotics", "barbell_class": "SPECULATIVE", "ccy": "HKD",
         "brokers": [{"broker": "Moomoo", "shares": 50, "avg_cost_local": 133.30}],
     },
+    # ── SHORT CALLS (options) — negative shares = short position ─────
+    # shares=-100 = 1 short contract; avg_cost_local = premium received per share
+    {
+        "ticker": "NVDA-C200-DEC26", "name": "Short Call NVDA $200 Dec-2026",
+        "region": "US", "sector": "Options — Short Call", "barbell_class": "TACTICAL",
+        "ccy": "USD",
+        "brokers": [{"broker": "IBKR", "shares": -100, "avg_cost_local": 27.10}],
+    },
+    {
+        "ticker": "MSFT-C440-MAY26", "name": "Short Call MSFT $440 May-2026",
+        "region": "US", "sector": "Options — Short Call", "barbell_class": "TACTICAL",
+        "ccy": "USD",
+        "brokers": [{"broker": "Schwab", "shares": -100, "avg_cost_local": 15.99}],
+    },
+    {
+        "ticker": "APLD-C32-MAY26", "name": "Short Call APLD $32 May-2026",
+        "region": "US", "sector": "Options — Short Call", "barbell_class": "TACTICAL",
+        "ccy": "USD",
+        "brokers": [{"broker": "Schwab", "shares": -100, "avg_cost_local": 3.61}],
+    },
+
     # Citi structured note — fixed income bucket
     {
         "ticker": "STRUCT-CITI", "name": "Citi Dual Ccy Note USD/SGD/CHF Jun-2029",
@@ -468,7 +489,11 @@ INITIAL_POSITIONS = [
 # ── Ticker format map for yfinance ───────────────────────────────
 # yfinance uses slightly different formats for some tickers
 TICKER_MAP = {
-    "BRK/B":       "BRK-B",
-    "STRUCT-CITI": None,      # no live price, mark manually
-    "9618.HK":     "9618.HK",
+    "BRK/B":          "BRK-B",
+    "STRUCT-CITI":    None,              # no live price, mark manually
+    "9618.HK":        "9618.HK",
+    # Short calls — OCC option ticker format for yfinance
+    "NVDA-C200-DEC26": "NVDA261218C00200000",
+    "MSFT-C440-MAY26": "MSFT260522C00440000",
+    "APLD-C32-MAY26":  "APLD260522C00032000",
 }
