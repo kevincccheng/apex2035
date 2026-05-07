@@ -38,7 +38,7 @@ def check_password():
     st.caption("Private portfolio dashboard — authorised access only.")
     pwd = st.text_input("Password", type="password", key="pwd_input")
     if st.button("Enter", type="primary"):
-        if pwd == correct:
+        if pwd.strip() == correct.strip():
             st.session_state["authenticated"] = True
             st.rerun()
         else:
