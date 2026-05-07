@@ -137,7 +137,7 @@ col_title, col_ts = st.columns([3, 1])
 with col_title:
     st.title(f"📈 {PROJECT_NAME}")
 with col_ts:
-    st.caption(f"FX: HKD/USD = {fx_rate:.4f}\nPrices ~15 min delayed")
+    st.caption(f"FX: USD/HKD = {fx_rate:.4f}\nPrices ~15 min delayed")
 
 # Top KPI row
 k1, k2, k3, k4, k5, k6 = st.columns(6)
