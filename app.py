@@ -42,7 +42,7 @@ def check_password():
             st.session_state["authenticated"] = True
             st.rerun()
         else:
-            st.error("Incorrect password.")
+            st.error(f"Incorrect. App expects a {len(correct)}-character password. You entered {len(pwd.strip())} characters.")
     return False
 
 if not check_password():
