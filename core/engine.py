@@ -86,6 +86,7 @@ def build_portfolio(holdings_df: pd.DataFrame,
             "gl_pct":         gl_pct,
             "gl_report":      gl_report,
             "brokers":        broker_names,
+            "brokers_list":   brokers,
             "compliance_flag":h.get("compliance_flag", ""),
             "notes":          h.get("notes", ""),
         })

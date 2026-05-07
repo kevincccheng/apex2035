@@ -254,56 +254,54 @@ with tab1:
 # ══════════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("Broker Reconciliation — Cross-Check View")
-    st.caption("Match these numbers against your broker mobile apps. Green = live price available.")
+    st.caption("Match these numbers against your broker mobile apps.")
 
     for broker in BROKERS:
-        # Expand brokers_json to find positions at this broker
         broker_rows = []
         for _, row in port_df.iterrows():
-            try:
-                bs = json.loads(row.get("brokers_json_raw", "[]") or "[]")
-            except Exception:
-                bs = []
-            # Fallback: parse from brokers string
-            if broker.lower() in str(row.get("brokers", "")).lower():
-                # Estimate this broker's share of the position
-                try:
-                    all_b = json.loads(
-                        read_holdings()[read_holdings()["ticker"] == row["ticker"]]["brokers_json"].values[0]
-                    )
-                    this_b = next((b for b in all_b if b["broker"] == broker), None)
-                    if this_b:
-                        shares_here = this_b["shares"]
-                        mv_here = (shares_here * row["live_price"]) if row["live_price"] else None
-                        if row["ccy"] == "HKD" and mv_here:
-                            mv_here_usd = mv_here / fx_rate
-                        else:
-                            mv_here_usd = mv_here
-                        broker_rows.append({
-                            "Ticker": row["ticker"],
-                            "Name":   row["name"],
-                            "Shares": shares_here,
-                            "Price":  f"{'HK$' if row['ccy']=='HKD' else '$'}{row['live_price']:,.2f}" if row["live_price"] else "—",
-                            f"MV ({report_ccy})": f"{ccy_sym}{mv_here_usd * (fx_rate if report_ccy=='HKD' else 1):,.0f}" if mv_here_usd else "—",
-                        })
-                except Exception:
-                    pass
+            broker_detail = next(
+                (b for b in row["brokers_list"] if b["broker"] == broker), None
+            )
+            if broker_detail is None:
+                continue
 
-        is_legacy = False  # All brokers updated same way — Trade Entry tab or verbally
+            shares_here = broker_detail["shares"]
+            cost_here   = broker_detail["avg_cost_local"]
+            live_price  = row["live_price"]
+            ccy         = row["ccy"]
+            sym         = "HK$" if ccy == "HKD" else "$"
+
+            if live_price:
+                mv_local_here = shares_here * live_price
+                mv_usd_here   = mv_local_here / fx_rate if ccy == "HKD" else mv_local_here
+                mv_report_here = mv_usd_here * fx_rate if report_ccy == "HKD" else mv_usd_here
+                mv_str = f"{ccy_sym}{mv_report_here:,.0f}"
+            else:
+                mv_report_here = None
+                mv_str = "—"
+
+            broker_rows.append({
+                "Ticker":          row["ticker"],
+                "Name":            row["name"],
+                "Shares":          f"{shares_here:,.4f}".rstrip('0').rstrip('.') if shares_here % 1 != 0 else f"{shares_here:,.0f}",
+                "Avg Cost":        f"{sym}{cost_here:,.4f}",
+                "Live Price":      f"{sym}{live_price:,.2f}" if live_price else "—",
+                f"MV ({report_ccy})": mv_str,
+            })
+
         total_broker_mv = sum(
             float(r[f"MV ({report_ccy})"].replace(ccy_sym, "").replace(",", ""))
-            for r in broker_rows
-            if r[f"MV ({report_ccy})"] != "—"
+            for r in broker_rows if r[f"MV ({report_ccy})"] != "—"
         ) if broker_rows else 0
 
-        label = f"🟢 {broker}  —  est. {ccy_sym}{total_broker_mv:,.0f} {report_ccy}"
-        with st.expander(label, expanded=not is_legacy):
-            st.caption("💡 Update via Trade Entry tab or tell Claude verbally — works for all brokers.")
+        n = len(broker_rows)
+        label = f"{'🟢' if n > 0 else '⚪'} {broker}  —  {n} position{'s' if n != 1 else ''}  |  est. {ccy_sym}{total_broker_mv:,.0f} {report_ccy}"
+        with st.expander(label, expanded=(n > 0)):
             if broker_rows:
                 st.dataframe(pd.DataFrame(broker_rows),
                              use_container_width=True, hide_index=True)
             else:
-                st.caption("No positions found for this broker.")
+                st.caption("No positions recorded for this broker.")
 
 
 # ══════════════════════════════════════════════════════════════════
