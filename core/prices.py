@@ -9,7 +9,7 @@ from config import TICKER_MAP, PRICE_CACHE_S
 def get_hkd_usd_rate() -> float:
     """Live HKD/USD rate from yfinance."""
     try:
-        tk = yf.Ticker("HKDUSD=X")
+        tk = yf.Ticker("USDHKD=X")
         hist = tk.history(period="1d")
         if not hist.empty:
             return float(hist["Close"].iloc[-1])
