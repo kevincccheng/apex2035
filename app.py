@@ -31,7 +31,7 @@ st.set_page_config(
 
 # ── Password gate ─────────────────────────────────────────────────
 def check_password():
-    correct = st.secrets.get("app_password", "CHANGE_ME")
+    correct = st.secrets.get("app_password", "apex2035")
     if st.session_state.get("authenticated"):
         return True
     st.title("📈 Apex 2035")
@@ -42,7 +42,7 @@ def check_password():
             st.session_state["authenticated"] = True
             st.rerun()
         else:
-            st.error(f"Incorrect. App expects a {len(correct)}-character password. You entered {len(pwd.strip())} characters.")
+            st.error("Incorrect password.")
     return False
 
 if not check_password():
