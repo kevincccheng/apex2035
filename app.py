@@ -25,7 +25,7 @@ from core.engine import (
 from core.exports import (
     export_portfolio_pdf, export_stock_pdf, export_conviction_pdf,
 )
-from core.lseg_data import lseg_available
+from core.lseg_data import lseg_available, lseg_connected
 
 # ── Page config ───────────────────────────────────────────────────
 st.set_page_config(
@@ -139,14 +139,17 @@ with st.sidebar:
         use_lseg = st.toggle(
             "🔬 Enhanced data (LSEG)",
             value=True,
-            help="Uses LSEG EDP to fill missing fundamentals for HK stocks and "
-                 "5yr P/E averages. Requires Eikon/Workspace running locally.",
+            help="Uses LSEG EDP to supplement yfinance fundamentals. "
+                 "Requires Refinitiv Workspace desktop app to be running.",
         )
         if use_lseg:
-            st.caption("LSEG active ✓")
+            if lseg_connected():
+                st.caption("🟢 LSEG connected")
+            else:
+                st.caption("🔴 LSEG key found but Workspace not running")
     else:
         use_lseg = False
-        st.caption("⚠️ LSEG not configured\n(EDP_API_KEY missing or desktop not running)")
+        st.caption("⚠️ LSEG not configured — add EDP_API_KEY to .env")
 
     st.divider()
     st.caption(f"Project Apex 2035\nTarget: {ccy_sym}{TARGET_5X_USD:,.0f}\nHK tax: 0% CGT ✓")
