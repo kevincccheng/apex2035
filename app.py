@@ -145,8 +145,9 @@ with st.sidebar:
                      "Requires Refinitiv Workspace desktop app to be running.",
             )
         with _lseg_cols[1]:
-            if st.button("↺", help="Reconnect LSEG (click after opening Workspace)"):
+            if st.button("↺", help="Reconnect LSEG and clear cached results"):
                 refresh_lseg()
+                st.cache_data.clear()
                 st.rerun()
         if use_lseg:
             if lseg_connected():
