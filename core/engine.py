@@ -200,32 +200,60 @@ def calculate_pillars(ticker_sym: str, use_lseg: bool = False) -> dict:
     pillars is a list of 10 dicts: {number, name, value, rating, note}
     rating is one of: GREEN, YELLOW, RED, NA
     """
+    import time as _time
     ticker_sym = ticker_sym.strip().upper()
 
     def _err(msg):
         return {"error": msg, "company_info": {}, "pillars": [], "score": 0,
                 "verdict": "N/A", "historical": []}
 
+    def _is_rate_limit(e):
+        s = str(e).lower()
+        return "rate" in s or "429" in s or "too many" in s
+
+    # Step 1: fast_info (1 lightweight request) — validates ticker, gets price
     try:
         tk   = yf.Ticker(ticker_sym)
-        info = tk.info or {}
+        fast = tk.fast_info
+        price_check = (getattr(fast, "last_price", None)
+                       or getattr(fast, "previous_close", None))
     except Exception as e:
-        return _err(f"Could not fetch '{ticker_sym}': {e}")
+        if _is_rate_limit(e):
+            return _err("Yahoo Finance rate limit hit. Wait 15–30 seconds and try again.")
+        return _err(f"Ticker '{ticker_sym}' not found: {e}")
 
-    price_check = (info.get("currentPrice") or info.get("regularMarketPrice")
-                   or info.get("previousClose"))
     if not price_check:
         return _err(f"Ticker '{ticker_sym}' not found or has no price data.")
 
-    # ── Company info ─────────────────────────────────────────────
+    # Step 2: full info dict (heavier) — retry once on rate limit
+    info = {}
+    for _attempt in range(2):
+        try:
+            info = tk.info or {}
+            break
+        except Exception as e:
+            if _is_rate_limit(e) and _attempt == 0:
+                _time.sleep(4)
+                continue
+            break  # non-rate-limit error or second attempt failed — proceed with {}
+
+    # ── Company info — fall back to fast_info when info is sparse ─
+    _fi = fast  # fast_info object
+    price_check = (info.get("currentPrice") or info.get("regularMarketPrice")
+                   or info.get("previousClose") or price_check)
     company_info = {
-        "name":         info.get("longName") or info.get("shortName") or ticker_sym,
-        "sector":       info.get("sector") or info.get("quoteType", "N/A"),
-        "market_cap":   info.get("marketCap"),
+        "name":         (info.get("longName") or info.get("shortName") or ticker_sym),
+        "sector":       (info.get("sector") or info.get("quoteType")
+                         or getattr(_fi, "quote_type", "N/A")),
+        "market_cap":   (info.get("marketCap")
+                         or getattr(_fi, "market_cap", None)),
         "price":        float(price_check),
-        "currency":     info.get("currency", "USD"),
-        "week_52_high": info.get("fiftyTwoWeekHigh"),
-        "week_52_low":  info.get("fiftyTwoWeekLow"),
+        "currency":     (info.get("currency")
+                         or getattr(_fi, "currency", "USD")),
+        "week_52_high": (info.get("fiftyTwoWeekHigh")
+                         or getattr(_fi, "fifty_two_week_high", None)),
+        "week_52_low":  (info.get("fiftyTwoWeekLow")
+                         or getattr(_fi, "fifty_two_week_low", None)),
     }
 
     # ── Financial statements ─────────────────────────────────────
