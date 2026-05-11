@@ -451,3 +451,120 @@ def export_stock_pdf(ticker: str, result: dict) -> bytes:
 
     doc.build(story)
     return buf.getvalue()
+
+
+# ══════════════════════════════════════════════════════════════════
+# CONVICTION LOG PDF
+# ══════════════════════════════════════════════════════════════════
+def export_conviction_pdf(conv_df: pd.DataFrame, stats: dict = None) -> bytes:
+    """
+    Generates a conviction log PDF (3 pages).
+    Attach to Claude AI: 'Review my conviction quality.'
+    """
+    import math
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        rightMargin=0.75*inch, leftMargin=0.75*inch,
+        topMargin=0.75*inch,   bottomMargin=0.75*inch,
+    )
+    st_d = _styles()
+    story = []
+    stats = stats or {}
+
+    def _safe(v, fallback="—"):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return fallback
+        return str(v)
+
+    active = conv_df[conv_df["status"] == "ACTIVE"] \
+        if "status" in conv_df.columns else pd.DataFrame()
+    closed = conv_df[conv_df["status"] == "CLOSED"] \
+        if "status" in conv_df.columns else pd.DataFrame()
+
+    # ── PAGE 1: Active Convictions ────────────────────────────────
+    story.append(Paragraph("Conviction Log — Active Positions", st_d["title"]))
+    story.append(Paragraph(
+        f"Generated: {_now_str()}  |  Active: {len(active)}  |  Closed: {len(closed)}",
+        st_d["small"]))
+    story.append(Spacer(1, 0.1*inch))
+
+    if active.empty:
+        story.append(Paragraph("No active convictions recorded.", st_d["body"]))
+    else:
+        for _, r in active.iterrows():
+            ep  = _safe(r.get("entry_price"))
+            hdr = (f"{_safe(r.get('ticker'))} — {_safe(r.get('action'))} @ "
+                   f"${ep}  |  {_safe(r.get('entry_date'))}")
+            story.append(Paragraph(hdr, st_d["heading"]))
+            meta = [
+                ["Position Size", f"${_safe(r.get('position_size_usd'))}",
+                 "Max Cap", f"${_safe(r.get('max_size_cap_usd'))}"],
+                ["Time Horizon", f"{_safe(r.get('time_horizon_months'))} months",
+                 "Falsification $", f"${_safe(r.get('falsification_price'))}"],
+                ["Opp. Cost", _safe(r.get("opportunity_cost")),
+                 "Status", _safe(r.get("status"))],
+            ]
+            tm = Table(meta, colWidths=[1.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
+            tm.setStyle(_tbl_style(len(meta), hdr_color=_MID_BLUE))
+            story.append(tm)
+            story.append(Spacer(1, 0.04*inch))
+            for lbl, fld in [("Thesis", "thesis"),
+                              ("Bull Case", "bull_case"),
+                              ("Bear Case", "bear_case")]:
+                txt = _safe(r.get(fld), "")
+                if txt:
+                    story.append(Paragraph(f"<b>{lbl}:</b> {txt}", st_d["body"]))
+            story.append(Spacer(1, 0.15*inch))
+
+    # ── PAGE 2: Closed Convictions ────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("Conviction Log — Closed Positions", st_d["title"]))
+    story.append(Spacer(1, 0.08*inch))
+    if closed.empty:
+        story.append(Paragraph("No closed convictions yet.", st_d["body"]))
+    else:
+        cl_d = [["Ticker", "Action", "Entry $", "Entry Date",
+                  "Review Date", "Grade", "Outcome"]]
+        for _, r in closed.iterrows():
+            cl_d.append([
+                _safe(r.get("ticker")),
+                _safe(r.get("action")),
+                f"${_safe(r.get('entry_price'))}",
+                _safe(r.get("entry_date")),
+                _safe(r.get("review_date")),
+                _safe(r.get("grade")),
+                _safe(r.get("outcome_notes"), "")[:50],
+            ])
+        tc = Table(cl_d,
+                   colWidths=[0.7*inch, 0.9*inch, 0.7*inch, 0.85*inch,
+                               0.85*inch, 0.5*inch, 2.25*inch],
+                   repeatRows=1)
+        tc.setStyle(_tbl_style(len(cl_d)))
+        story.append(tc)
+
+    # ── PAGE 3: Track Record ──────────────────────────────────────
+    story.append(PageBreak())
+    story.append(Paragraph("Track Record & Statistics", st_d["title"]))
+    story.append(Spacer(1, 0.08*inch))
+    s_rows = [
+        ["Metric", "Value"],
+        ["Total decisions recorded", str(stats.get("total_decisions", len(conv_df)))],
+        ["Win rate (A+B grades)",     f"{stats.get('win_rate_pct', 0):.0f}%"],
+        ["Average hold period",       f"{stats.get('avg_hold_days', 0):.0f} days"],
+        ["Avg P&L closed positions",  f"{stats.get('avg_pnl_pct', 0):+.1f}%"],
+        ["Active convictions",        str(len(active))],
+        ["Closed convictions",        str(len(closed))],
+    ]
+    ts = Table(s_rows, colWidths=[3.0*inch, 2.0*inch])
+    ts.setStyle(_tbl_style(len(s_rows)))
+    story.append(ts)
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph(
+        "Tip: Attach this PDF to Claude AI and ask: "
+        "'Review my conviction quality. What patterns do you see in my mistakes?'",
+        st_d["small"]))
+
+    doc.build(story)
+    return buf.getvalue()

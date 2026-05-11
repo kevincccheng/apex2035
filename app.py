@@ -15,13 +15,17 @@ from config import (
     REPORT_CURRENCIES, DEFAULT_CURRENCY,
 )
 from core.prices import get_prices_batch, get_hkd_usd_rate
+from concurrent.futures import ThreadPoolExecutor
 from core.engine import (
     build_portfolio, portfolio_summary, allocation_by,
     concentration_alerts, compliance_check,
     calc_new_avg_cost, target_progress,
-    calculate_pillars,
+    calculate_pillars, get_technical_signals,
 )
-from core.exports import export_portfolio_pdf, export_stock_pdf
+from core.exports import (
+    export_portfolio_pdf, export_stock_pdf, export_conviction_pdf,
+)
+from core.lseg_data import lseg_available
 
 # ── Page config ───────────────────────────────────────────────────
 st.set_page_config(
@@ -121,6 +125,30 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+    # Technical signals overlay (Master Ledger tab)
+    show_ta = st.checkbox(
+        "📊 Show technical signals",
+        value=False,
+        help="Adds 200DMA, 52W Range, RS, Volume columns to Master Ledger. "
+             "Fetches data for visible positions — adds ~5-10 s.",
+    )
+
+    st.divider()
+    # LSEG enhanced data (Stock Analyzer)
+    if lseg_available():
+        use_lseg = st.toggle(
+            "🔬 Enhanced data (LSEG)",
+            value=True,
+            help="Uses LSEG EDP to fill missing fundamentals for HK stocks and "
+                 "5yr P/E averages. Requires Eikon/Workspace running locally.",
+        )
+        if use_lseg:
+            st.caption("LSEG active ✓")
+    else:
+        use_lseg = False
+        st.caption("⚠️ LSEG not configured\n(EDP_API_KEY missing or desktop not running)")
+
+    st.divider()
     st.caption(f"Project Apex 2035\nTarget: {ccy_sym}{TARGET_5X_USD:,.0f}\nHK tax: 0% CGT ✓")
 
     if not SHEETS_AVAILABLE:
@@ -183,7 +211,7 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📊 Master Ledger",
     "🏦 Broker Recon",
     "🎯 Analytics",
@@ -191,6 +219,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "✏️ Trade Entry",
     "📄 Export",
     "📈 Stock Analyzer",
+    "🎯 Conviction Tracker",
 ])
 
 
@@ -258,6 +287,59 @@ with tab1:
         "Held at":      df_view["brokers"],
         "Price time":   df_view["price_ts"],
     })
+
+    # ── Technical Signals overlay ─────────────────────────────────
+    if show_ta:
+        _vis_tickers = df_view["ticker"].tolist()
+        with st.spinner(f"Calculating technical signals for {len(_vis_tickers)} positions…"):
+            with ThreadPoolExecutor(max_workers=5) as _ex:
+                _futures = {t: _ex.submit(get_technical_signals, t) for t in _vis_tickers}
+            _ta_map = {t: f.result() for t, f in _futures.items()}
+
+        def _fmt_ma(ticker):
+            s = _ta_map.get(ticker, {}).get("ma200", {})
+            if not s:
+                return "—"
+            pct = s["pct_from_ma"]
+            return f"✅ +{pct:.1f}%" if s["above"] else f"❌ {pct:.1f}%"
+
+        def _fmt_52w(ticker):
+            s = _ta_map.get(ticker, {}).get("range_52w", {})
+            if not s:
+                return "—"
+            p = s["position_pct"]
+            if p > 75:
+                return f"🟢 {p:.0f}%"
+            elif p >= 25:
+                return f"🟡 {p:.0f}%"
+            else:
+                return f"🔴 {p:.0f}%"
+
+        def _fmt_rs(ticker):
+            s = _ta_map.get(ticker, {}).get("rs_vs_index", {})
+            if not s:
+                return "—"
+            rel = s["relative_pct"]
+            bm  = s.get("benchmark", "SPY")
+            sign = "+" if rel >= 0 else ""
+            return f"{sign}{rel:.1f}% vs {bm}"
+
+        def _fmt_vol(ticker):
+            s = _ta_map.get(ticker, {}).get("volume", {})
+            if not s:
+                return "—"
+            r = s["ratio"]
+            if r > 1.5:
+                return f"🔥 {r:.1f}x"
+            elif r >= 0.75:
+                return f"📊 {r:.1f}x"
+            else:
+                return f"😴 {r:.1f}x"
+
+        display["200DMA"]   = display["Ticker"].apply(_fmt_ma)
+        display["52W Range"] = display["Ticker"].apply(_fmt_52w)
+        display["RS 3M"]    = display["Ticker"].apply(_fmt_rs)
+        display["Volume"]   = display["Ticker"].apply(_fmt_vol)
 
     st.dataframe(display, use_container_width=True, hide_index=True,
                  height=min(50 + len(display) * 35, 650))
@@ -970,7 +1052,7 @@ with tab7:
         _ticker_clean = _aticker.strip().upper()
 
         with st.spinner(f"Analyzing {_ticker_clean}… fetching financials (10–20 s)"):
-            _result = calculate_pillars(_ticker_clean)
+            _result = calculate_pillars(_ticker_clean, use_lseg)
 
         if _result.get("error"):
             st.error(f"❌ {_result['error']}")
@@ -1092,3 +1174,299 @@ with tab7:
 
     elif _analyze_btn:
         st.warning("Please enter a ticker symbol.")
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 8 — CONVICTION TRACKER
+# ══════════════════════════════════════════════════════════════════
+with tab8:
+    st.subheader("🎯 Conviction Tracker — Investment Discipline Engine")
+    st.caption(
+        "Record your investment thesis before every trade. "
+        "Review quarterly and grade yourself honestly."
+    )
+
+    if not SHEETS_AVAILABLE:
+        st.warning(
+            "⚠️ Google Sheets not connected. "
+            "Conviction data will not be saved. See SETUP.md."
+        )
+
+    # ── SECTION 1: New Conviction Entry ──────────────────────────
+    st.markdown("### 📝 Record New Conviction")
+    with st.form("conviction_form", clear_on_submit=True):
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            _cv_ticker = st.text_input("Ticker", placeholder="e.g. MSFT or 0700.HK")
+            _cv_action = st.selectbox("Action",
+                ["NEW POSITION", "ADD TO EXISTING", "REDUCE", "EXIT"])
+            _cv_price  = st.number_input("Entry Price", min_value=0.0,
+                                          step=0.01, format="%.4f")
+            _cv_size   = st.number_input("Position Size (USD)", min_value=0.0,
+                                          step=1000.0, format="%.0f")
+            _cv_max    = st.number_input("Max Size Cap (USD)",  min_value=0.0,
+                                          step=1000.0, format="%.0f",
+                                          help="Maximum I will ever put in this position")
+        with _c2:
+            _cv_horizon = st.slider("Time Horizon (months)", 1, 36, 12)
+            _cv_false   = st.number_input(
+                "Falsification Price",
+                min_value=0.0, step=0.01, format="%.4f",
+                help="I am wrong if price drops below this level",
+            )
+            _cv_opp = st.text_input(
+                "Opportunity Cost",
+                placeholder="vs buying VOO instead",
+            )
+
+        _cv_thesis = st.text_area(
+            "Investment Thesis (3 sentences max)",
+            max_chars=400,
+            placeholder="Why this works, why now, why better than alternatives",
+        )
+        _cv_bull = st.text_area("Bull Case", max_chars=200,
+                                 placeholder="What makes this work")
+        _cv_bear = st.text_area("Bear Case — what proves me wrong", max_chars=200)
+
+        _cv_submit = st.form_submit_button("✅ Record Conviction", type="primary")
+
+    if _cv_submit:
+        if not _cv_ticker.strip():
+            st.error("Please enter a ticker symbol.")
+        elif _cv_price <= 0:
+            st.error("Entry price must be greater than zero.")
+        elif not _cv_thesis.strip():
+            st.error("Investment thesis is required.")
+        else:
+            # Fetch company name from yfinance
+            _cv_name = _cv_ticker.strip().upper()
+            try:
+                import yfinance as _yf
+                _cv_info = _yf.Ticker(_cv_name).info
+                _cv_name = (_cv_info.get("longName") or
+                             _cv_info.get("shortName") or _cv_name)
+            except Exception:
+                pass
+
+            _cv_row = {
+                "ticker":             _cv_ticker.strip().upper(),
+                "name":               _cv_name,
+                "action":             _cv_action,
+                "entry_price":        _cv_price,
+                "position_size_usd":  _cv_size,
+                "max_size_cap_usd":   _cv_max,
+                "thesis":             _cv_thesis.strip(),
+                "bull_case":          _cv_bull.strip(),
+                "bear_case":          _cv_bear.strip(),
+                "falsification_price": _cv_false,
+                "time_horizon_months": _cv_horizon,
+                "opportunity_cost":   _cv_opp.strip(),
+                "status":             "ACTIVE",
+            }
+
+            if SHEETS_AVAILABLE:
+                from core.sheets import append_conviction
+                _cv_res = append_conviction(_cv_row)
+                if _cv_res is True:
+                    st.success(
+                        f"✅ Conviction recorded: {_cv_ticker.strip().upper()} — "
+                        f"{_cv_action} @ ${_cv_price:,.2f}  |  "
+                        f"Horizon: {_cv_horizon} months  |  "
+                        f"Falsification: ${_cv_false:,.2f}"
+                    )
+                else:
+                    st.error(f"Failed to save: {_cv_res}")
+            else:
+                st.info("✅ Conviction validated. Connect Google Sheets to persist.")
+
+    st.divider()
+
+    # ── SECTION 2: Active Convictions ────────────────────────────
+    st.markdown("### 📊 Active Convictions")
+
+    if SHEETS_AVAILABLE:
+        from core.sheets import read_convictions, update_conviction
+        _all_cv = read_convictions()
+
+        if _all_cv.empty:
+            st.info("No convictions recorded yet. Add your first one above.")
+        else:
+            _active_cv = _all_cv[_all_cv["status"] == "ACTIVE"].copy() \
+                if "status" in _all_cv.columns else _all_cv.copy()
+
+            if _active_cv.empty:
+                st.info("No active convictions. All positions have been reviewed.")
+            else:
+                # Fetch current prices for P&L
+                _cv_tickers_list = _active_cv["ticker"].dropna().unique().tolist()
+                with st.spinner("Fetching current prices…"):
+                    _cv_prices = {}
+                    for _cvt in _cv_tickers_list:
+                        try:
+                            import yfinance as _yf2
+                            _cvtk = _yf2.Ticker(_cvt)
+                            _cvp  = (_cvtk.info.get("currentPrice") or
+                                      _cvtk.info.get("regularMarketPrice"))
+                            _cv_prices[_cvt] = float(_cvp) if _cvp else None
+                        except Exception:
+                            _cv_prices[_cvt] = None
+
+                # Build display table
+                _cv_rows = []
+                for _, _r in _active_cv.iterrows():
+                    _t  = str(_r.get("ticker", ""))
+                    _ep = _r.get("entry_price")
+                    _cp = _cv_prices.get(_t)
+                    _pnl_pct = (((_cp - float(_ep)) / float(_ep)) * 100
+                                 if (_cp and _ep and float(_ep) > 0) else None)
+                    _ed = str(_r.get("entry_date", ""))
+                    try:
+                        from datetime import date as _date_cls
+                        _days = (datetime.date.today() -
+                                  datetime.date.fromisoformat(_ed)).days
+                    except Exception:
+                        _days = 0
+
+                    _fp  = _r.get("falsification_price")
+                    _at_false = (_cp and _fp and float(_fp) > 0 and
+                                  _cp < float(_fp))
+
+                    _thesis_trunc = str(_r.get("thesis", ""))[:50]
+                    _pnl_str = (f"{_pnl_pct:+.1f}%" if _pnl_pct is not None else "—")
+                    _cp_str  = (f"${_cp:,.2f}" if _cp else "—")
+                    _ep_str  = (f"${float(_ep):,.2f}" if _ep else "—")
+
+                    _cv_rows.append({
+                        "Ticker":    _t,
+                        "Entry Date":_ed,
+                        "Entry $":   _ep_str,
+                        "Current $": _cp_str,
+                        "P&L %":     _pnl_str,
+                        "Days Held": str(_days),
+                        "Thesis":    _thesis_trunc + ("…" if len(str(_r.get("thesis",""))) > 50 else ""),
+                        "False. $":  (f"${float(_fp):,.2f}" if _fp else "—"),
+                        "Alert":     "⚠️ FALSIFICATION" if _at_false else "",
+                        "conv_id":   str(_r.get("conviction_id", "")),
+                    })
+
+                _cv_display = pd.DataFrame(_cv_rows).drop(columns=["conv_id"])
+                st.dataframe(_cv_display, use_container_width=True,
+                              hide_index=True)
+
+                # Review forms per conviction (expander per row)
+                st.markdown("#### Review a Conviction")
+                _cv_options = [
+                    f"{r['Ticker']} — {r['Entry Date']} ({r['P&L %']})"
+                    for r in _cv_rows
+                ]
+                _selected_idx = st.selectbox(
+                    "Select conviction to review",
+                    range(len(_cv_rows)),
+                    format_func=lambda i: _cv_options[i],
+                    key="cv_review_select",
+                )
+                if _cv_rows:
+                    _sel = _cv_rows[_selected_idx]
+                    with st.form("review_form", clear_on_submit=True):
+                        _rv_c1, _rv_c2 = st.columns(2)
+                        with _rv_c1:
+                            _rv_grade  = st.selectbox("Grade",
+                                ["A — Thesis played out perfectly",
+                                 "B — Mostly correct, minor miss",
+                                 "C — Mixed, thesis partly wrong",
+                                 "D — Thesis largely wrong",
+                                 "F — Completely wrong"])
+                            _rv_status = st.selectbox("Update Status",
+                                ["ACTIVE", "REVIEWING", "CLOSED"])
+                        with _rv_c2:
+                            _rv_date = st.date_input("Review Date",
+                                                      value=datetime.date.today())
+                        _rv_notes = st.text_area("Outcome Notes",
+                            placeholder="What happened? What did you miss? What will you do differently?",
+                            max_chars=400)
+                        _rv_submit = st.form_submit_button(
+                            "💾 Save Review", type="primary")
+
+                    if _rv_submit:
+                        _rv_grade_letter = _rv_grade[0]  # "A", "B", etc.
+                        _rv_res = update_conviction(_sel["conv_id"], {
+                            "grade":         _rv_grade_letter,
+                            "status":        _rv_status,
+                            "review_date":   str(_rv_date),
+                            "outcome_notes": _rv_notes.strip(),
+                        })
+                        if _rv_res is True:
+                            st.success("✅ Review saved.")
+                            st.cache_data.clear()
+                        else:
+                            st.error(f"Save failed: {_rv_res}")
+
+        # PDF export
+        st.divider()
+        _cv_pdf_col, _ = st.columns([1, 2])
+        with _cv_pdf_col:
+            if st.button("📄 Export Conviction Log PDF", key="cv_pdf_btn",
+                         use_container_width=True):
+                if not _all_cv.empty:
+                    with st.spinner("Generating PDF…"):
+                        # Compute basic stats
+                        _cl = _all_cv[_all_cv.get("status", pd.Series()) == "CLOSED"] \
+                            if "status" in _all_cv.columns else pd.DataFrame()
+                        _graded = _cl[_cl["grade"].isin(["A","B","C","D","F"])] \
+                            if "grade" in _cl.columns else pd.DataFrame()
+                        _wins   = len(_cl[_cl["grade"].isin(["A","B"])]) \
+                            if "grade" in _cl.columns else 0
+                        _stats = {
+                            "total_decisions": len(_all_cv),
+                            "win_rate_pct":    (_wins / len(_graded) * 100
+                                                if len(_graded) > 0 else 0),
+                            "avg_hold_days":   0,
+                            "avg_pnl_pct":     0,
+                        }
+                        _cv_pdf = export_conviction_pdf(_all_cv, _stats)
+                    st.download_button(
+                        "⬇️ Download Conviction Log",
+                        _cv_pdf,
+                        f"apex2035_conviction_log_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                        "application/pdf",
+                        key="dl_cv_pdf",
+                    )
+                else:
+                    st.info("No conviction data to export yet.")
+    else:
+        st.caption("Connect Google Sheets to use the Conviction Tracker.")
+
+    st.divider()
+
+    # ── SECTION 3: Statistics ─────────────────────────────────────
+    st.markdown("### 📈 Track Record")
+    if SHEETS_AVAILABLE:
+        try:
+            _stats_cv = read_convictions() if not _all_cv.empty else pd.DataFrame()
+        except Exception:
+            _stats_cv = pd.DataFrame()
+
+        if not _stats_cv.empty and "status" in _stats_cv.columns:
+            _closed_cv = _stats_cv[_stats_cv["status"] == "CLOSED"]
+            _graded_cv = _closed_cv[_closed_cv["grade"].isin(["A","B","C","D","F"])] \
+                if "grade" in _closed_cv.columns else pd.DataFrame()
+            _wins_cv   = len(_closed_cv[_closed_cv["grade"].isin(["A","B"])]) \
+                if "grade" in _closed_cv.columns else 0
+
+            _s1, _s2, _s3, _s4 = st.columns(4)
+            _s1.metric("Total Decisions", len(_stats_cv))
+            _s2.metric("Win Rate (A+B)",
+                       f"{_wins_cv/len(_graded_cv)*100:.0f}%"
+                       if len(_graded_cv) > 0 else "—")
+            _s3.metric("Active", len(_stats_cv[_stats_cv["status"] == "ACTIVE"]))
+            _s4.metric("Closed", len(_closed_cv))
+
+            if not _graded_cv.empty:
+                st.markdown("**Grade Distribution**")
+                _gd = _graded_cv["grade"].value_counts().reset_index()
+                _gd.columns = ["Grade", "Count"]
+                st.dataframe(_gd, use_container_width=False, hide_index=True)
+        else:
+            st.info("Record and close convictions to see your track record.")
+    else:
+        st.caption("Connect Google Sheets to see statistics.")

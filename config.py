@@ -2,6 +2,15 @@
 # All positions pre-seeded from May 4, 2026 portfolio snapshot
 # Edit barbell_class here to override classification
 
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+USE_LSEG = bool(os.getenv("EDP_API_KEY"))
+
 # ── Project targets ───────────────────────────────────────────────
 PROJECT_NAME   = "Project Apex 2035"
 TARGET_5X_USD  = 13_350_000   # Garden Terrace target

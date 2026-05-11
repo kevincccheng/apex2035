@@ -192,9 +192,10 @@ def target_progress(total_mv_usd: float) -> dict:
 
 # ── Stock Analyzer — 10-pillar fundamental framework ─────────────
 @st.cache_data(ttl=3600)
-def calculate_pillars(ticker_sym: str) -> dict:
+def calculate_pillars(ticker_sym: str, use_lseg: bool = False) -> dict:
     """
     Fetches yfinance data and evaluates any ticker across 10 fundamental pillars.
+    When use_lseg=True, supplements N/A pillars with LSEG EDP data.
     Returns: {error, company_info, pillars, score, verdict, historical}
     pillars is a list of 10 dicts: {number, name, value, rating, note}
     rating is one of: GREEN, YELLOW, RED, NA
@@ -268,6 +269,10 @@ def calculate_pillars(ticker_sym: str) -> dict:
     try:
         hist_5y = tk.history(period="5y", interval="3mo")
         if not hist_5y.empty and not inc.empty:
+            # Normalise index to tz-naive for safe date comparisons
+            if hist_5y.index.tz is not None:
+                hist_5y = hist_5y.copy()
+                hist_5y.index = hist_5y.index.tz_localize(None)
             shares_out = (info.get("sharesOutstanding")
                           or info.get("impliedSharesOutstanding"))
             if shares_out and shares_out > 0:
@@ -277,8 +282,11 @@ def calculate_pillars(ticker_sym: str) -> dict:
                                    "Net Income Including Noncontrolling Interests"], i)
                     if ni and ni > 0:
                         eps = ni / shares_out
-                        start_dt = col_date - pd.DateOffset(months=12)
-                        mask = (hist_5y.index >= start_dt) & (hist_5y.index <= col_date)
+                        col_dt = pd.Timestamp(col_date)
+                        if col_dt.tz is not None:
+                            col_dt = col_dt.tz_localize(None)
+                        start_dt = col_dt - pd.DateOffset(months=12)
+                        mask = (hist_5y.index >= start_dt) & (hist_5y.index <= col_dt)
                         price_slice = hist_5y.loc[mask, "Close"]
                         if not price_slice.empty and eps > 0:
                             pe_yr = float(price_slice.mean()) / eps
@@ -496,6 +504,50 @@ def calculate_pillars(ticker_sym: str) -> dict:
     score   = sum(1 for p in pillars if p["rating"] == "GREEN")
     verdict = "CHEAP" if score >= 8 else ("FAIR" if score >= 5 else "EXPENSIVE")
 
+    # ── LSEG supplement — fill N/A pillars ───────────────────────
+    if use_lseg:
+        try:
+            from core.lseg_data import get_fundamentals_lseg, get_historical_pe_lseg
+            lseg_data = get_fundamentals_lseg(ticker_sym)
+            if lseg_data:
+                # Pillar 1: P/E if N/A from yfinance
+                if pillars[0]["rating"] == "NA" and "pe_ratio" in lseg_data:
+                    lpe = lseg_data["pe_ratio"]
+                    lhist = get_historical_pe_lseg(ticker_sym, 5)
+                    lavg  = sum(lhist) / len(lhist) if lhist else None
+                    if lpe and lavg:
+                        diff = (lpe - lavg) / lavg * 100
+                        if lpe < lavg:
+                            r, n = "GREEN",  f"Below 5yr avg by {abs(diff):.0f}% [LSEG]"
+                        elif diff <= 10:
+                            r, n = "YELLOW", "Within 10% of 5yr avg [LSEG]"
+                        else:
+                            r, n = "RED",    f"Above 5yr avg by {diff:.0f}% [LSEG]"
+                        pillars[0].update({
+                            "value":  f"{lpe:.1f}x (5yr avg: {lavg:.1f}x) [LSEG]",
+                            "rating": r, "note": n,
+                        })
+                    elif lpe:
+                        pillars[0].update({"value": f"{lpe:.1f}x (5yr avg: N/A) [LSEG]"})
+
+                # Pillar 2: ROIC if N/A from yfinance
+                if pillars[1]["rating"] == "NA" and "roic" in lseg_data:
+                    roic = lseg_data["roic"]
+                    if roic > 15:
+                        r, n = "GREEN",  "Strong capital returns [LSEG]"
+                    elif roic >= 10:
+                        r, n = "YELLOW", "Adequate capital returns [LSEG]"
+                    else:
+                        r, n = "RED",    "Weak capital returns [LSEG]"
+                    pillars[1].update({"value": f"{roic:.1f}% [LSEG]",
+                                       "rating": r, "note": n})
+
+                # Recompute score/verdict with updated ratings
+                score   = sum(1 for p in pillars if p["rating"] == "GREEN")
+                verdict = "CHEAP" if score >= 8 else ("FAIR" if score >= 5 else "EXPENSIVE")
+        except Exception:
+            pass
+
     # ── Historical table for PDF ──────────────────────────────────
     historical = []
     if not inc.empty:
@@ -521,3 +573,77 @@ def calculate_pillars(ticker_sym: str) -> dict:
         "verdict":      verdict,
         "historical":   historical,
     }
+
+
+# ── Technical signals for Master Ledger overlay ──────────────────
+@st.cache_data(ttl=3600)
+def get_technical_signals(ticker_sym: str) -> dict:
+    """
+    Returns technical indicator signals for a single ticker.
+    Keys: ma200, range_52w, rs_vs_index, volume.
+    Returns {} on any error — never raises.
+    """
+    try:
+        tk   = yf.Ticker(ticker_sym)
+        hist = tk.history(period="15mo", auto_adjust=True)
+        if hist.empty or len(hist) < 30:
+            return {}
+
+        close   = hist["Close"]
+        current = float(close.iloc[-1])
+
+        # 200-day moving average
+        window     = min(200, len(close))
+        ma200_val  = float(close.rolling(window).mean().iloc[-1])
+        pct_ma     = (current - ma200_val) / ma200_val * 100 if ma200_val else 0
+
+        # 52-week range
+        days_1y = min(252, len(hist))
+        h1y     = hist.iloc[-days_1y:]
+        hi52    = float(h1y["High"].max()) if "High" in h1y.columns else float(h1y["Close"].max())
+        lo52    = float(h1y["Low"].min())  if "Low"  in h1y.columns else float(h1y["Close"].min())
+        span    = hi52 - lo52
+        pos52   = (current - lo52) / span * 100 if span > 0 else 50.0
+
+        # Relative strength vs benchmark (3-month)
+        is_hk     = ticker_sym.endswith(".HK")
+        benchmark = "^HSI" if is_hk else "SPY"
+        bh        = yf.Ticker(benchmark).history(period="3mo", auto_adjust=True)
+        days_3m   = min(63, len(close))
+        t_3m      = float((close.iloc[-1] / close.iloc[-days_3m] - 1) * 100)
+        b_3m      = 0.0
+        if not bh.empty:
+            bc   = bh["Close"]
+            n    = min(63, len(bc))
+            b_3m = float((bc.iloc[-1] / bc.iloc[-n] - 1) * 100)
+
+        # Volume
+        vol_data = {}
+        if "Volume" in hist.columns:
+            vol = hist["Volume"].dropna()
+            if len(vol) >= 5:
+                avg20 = float(vol.iloc[-20:].mean()) if len(vol) >= 20 else float(vol.mean())
+                avg5  = float(vol.iloc[-5:].mean())
+                vol_data = {
+                    "avg_20d": avg20,
+                    "avg_5d":  avg5,
+                    "ratio":   avg5 / avg20 if avg20 > 0 else 1.0,
+                }
+
+        return {
+            "ma200": {
+                "price": current, "ma200": ma200_val,
+                "above": current > ma200_val, "pct_from_ma": pct_ma,
+            },
+            "range_52w": {
+                "high": hi52, "low": lo52,
+                "current": current, "position_pct": pos52,
+            },
+            "rs_vs_index": {
+                "ticker_3m_pct": t_3m, "index_3m_pct": b_3m,
+                "relative_pct": t_3m - b_3m, "benchmark": benchmark,
+            },
+            "volume": vol_data,
+        }
+    except Exception:
+        return {}

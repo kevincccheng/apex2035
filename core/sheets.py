@@ -246,3 +246,86 @@ def append_watchlist(ticker: str, price, score: int, verdict: str):
         return True
     except Exception as e:
         return str(e)
+
+
+# ── Conviction Log ────────────────────────────────────────────────
+CONVICTION_COLS = [
+    "conviction_id", "entry_date", "ticker", "name", "action",
+    "entry_price", "position_size_usd", "max_size_cap_usd",
+    "thesis", "bull_case", "bear_case",
+    "falsification_price", "time_horizon_months",
+    "opportunity_cost", "status", "review_date",
+    "outcome_notes", "grade",
+]
+_CONVICTION_SHEET = "Conviction_Log"
+
+
+def _conviction_ws():
+    """Return (or create) the Conviction_Log worksheet."""
+    client = get_client()
+    wb     = client.open(GSHEET_NAME)
+    try:
+        return wb.worksheet(_CONVICTION_SHEET)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = wb.add_worksheet(_CONVICTION_SHEET, rows=2000,
+                               cols=len(CONVICTION_COLS))
+        ws.append_row(CONVICTION_COLS)
+        return ws
+
+
+def read_convictions() -> pd.DataFrame:
+    """Read all rows from Conviction_Log. Returns empty DataFrame on failure."""
+    try:
+        ws   = _conviction_ws()
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame(columns=CONVICTION_COLS)
+        df = pd.DataFrame(data)
+        for col in ["entry_price", "position_size_usd", "max_size_cap_usd",
+                    "falsification_price", "time_horizon_months"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame(columns=CONVICTION_COLS)
+
+
+def append_conviction(row: dict):
+    """
+    Append a new conviction to the log.
+    Returns True on success, error string on failure.
+    """
+    import uuid
+    try:
+        ws = _conviction_ws()
+        row.setdefault("conviction_id",   str(uuid.uuid4())[:8])
+        row.setdefault("entry_date",      datetime.date.today().isoformat())
+        row.setdefault("status",          "ACTIVE")
+        row.setdefault("review_date",     "")
+        row.setdefault("outcome_notes",   "")
+        row.setdefault("grade",           "")
+        values = [str(row.get(c, "")) for c in CONVICTION_COLS]
+        ws.append_row(values, value_input_option="USER_ENTERED")
+        return True
+    except Exception as e:
+        return str(e)
+
+
+def update_conviction(conviction_id: str, updates: dict):
+    """
+    Update specific fields for a conviction by ID.
+    Returns True on success, error string on failure.
+    """
+    try:
+        ws   = _conviction_ws()
+        data = ws.get_all_records()
+        for i, record in enumerate(data, 2):  # row 1 = header
+            if record.get("conviction_id") == conviction_id:
+                for col_name, value in updates.items():
+                    if col_name in CONVICTION_COLS:
+                        col_idx = CONVICTION_COLS.index(col_name) + 1
+                        ws.update_cell(i, col_idx, str(value))
+                return True
+        return "conviction_id not found"
+    except Exception as e:
+        return str(e)
