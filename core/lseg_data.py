@@ -27,7 +27,7 @@ def lseg_available() -> bool:
     return bool(get_edp_key())
 
 
-@st.cache_resource
+@st.cache_resource(ttl=120)
 def _get_lseg_module():
     """
     Import and open an LSEG session once per process.
@@ -59,6 +59,11 @@ def lseg_connected() -> bool:
     """True only when the LSEG session is open and Workspace is running."""
     _, ok = _get_lseg_module()
     return ok
+
+
+def refresh_lseg():
+    """Force re-check of LSEG connection on next call (use after opening Workspace)."""
+    _get_lseg_module.clear()
 
 
 def _extract(data, col_name: str):

@@ -509,7 +509,11 @@ def calculate_pillars(ticker_sym: str, use_lseg: bool = False) -> dict:
     benchmark = "^HSI" if ticker_sym.endswith(".HK") else "SPY"
     try:
         h_stock = tk.history(period="3y", auto_adjust=True)
-        h_bench = yf.Ticker(benchmark).history(period="3y", auto_adjust=True)
+        # Reuse cached 3mo benchmark if period matches; otherwise fetch 3yr directly
+        try:
+            h_bench = yf.Ticker(benchmark).history(period="3y", auto_adjust=True)
+        except Exception:
+            h_bench = pd.DataFrame()
         if not h_stock.empty and not h_bench.empty:
             r_s = (h_stock["Close"].iloc[-1] / h_stock["Close"].iloc[0] - 1) * 100
             r_b = (h_bench["Close"].iloc[-1] / h_bench["Close"].iloc[0] - 1) * 100
@@ -603,6 +607,15 @@ def calculate_pillars(ticker_sym: str, use_lseg: bool = False) -> dict:
     }
 
 
+@st.cache_data(ttl=3600)
+def _benchmark_history(benchmark: str) -> pd.DataFrame:
+    """Shared cached benchmark price history — prevents 60+ duplicate fetches."""
+    try:
+        return yf.Ticker(benchmark).history(period="3mo", auto_adjust=True)
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Technical signals for Master Ledger overlay ──────────────────
 @st.cache_data(ttl=3600)
 def get_technical_signals(ticker_sym: str) -> dict:
@@ -633,10 +646,10 @@ def get_technical_signals(ticker_sym: str) -> dict:
         span    = hi52 - lo52
         pos52   = (current - lo52) / span * 100 if span > 0 else 50.0
 
-        # Relative strength vs benchmark (3-month)
+        # Relative strength vs benchmark (3-month) — use shared cache
         is_hk     = ticker_sym.endswith(".HK")
         benchmark = "^HSI" if is_hk else "SPY"
-        bh        = yf.Ticker(benchmark).history(period="3mo", auto_adjust=True)
+        bh        = _benchmark_history(benchmark)
         days_3m   = min(63, len(close))
         t_3m      = float((close.iloc[-1] / close.iloc[-days_3m] - 1) * 100)
         b_3m      = 0.0

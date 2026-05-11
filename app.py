@@ -25,7 +25,7 @@ from core.engine import (
 from core.exports import (
     export_portfolio_pdf, export_stock_pdf, export_conviction_pdf,
 )
-from core.lseg_data import lseg_available, lseg_connected
+from core.lseg_data import lseg_available, lseg_connected, refresh_lseg
 
 # ── Page config ───────────────────────────────────────────────────
 st.set_page_config(
@@ -136,17 +136,23 @@ with st.sidebar:
     st.divider()
     # LSEG enhanced data (Stock Analyzer)
     if lseg_available():
-        use_lseg = st.toggle(
-            "🔬 Enhanced data (LSEG)",
-            value=True,
-            help="Uses LSEG EDP to supplement yfinance fundamentals. "
-                 "Requires Refinitiv Workspace desktop app to be running.",
-        )
+        _lseg_cols = st.columns([3, 1])
+        with _lseg_cols[0]:
+            use_lseg = st.toggle(
+                "🔬 Enhanced data (LSEG)",
+                value=True,
+                help="Uses LSEG EDP to supplement yfinance fundamentals. "
+                     "Requires Refinitiv Workspace desktop app to be running.",
+            )
+        with _lseg_cols[1]:
+            if st.button("↺", help="Reconnect LSEG (click after opening Workspace)"):
+                refresh_lseg()
+                st.rerun()
         if use_lseg:
             if lseg_connected():
                 st.caption("🟢 LSEG connected")
             else:
-                st.caption("🔴 LSEG key found but Workspace not running")
+                st.caption("🔴 Workspace not open — click ↺ after opening it")
     else:
         use_lseg = False
         st.caption("⚠️ LSEG not configured — add EDP_API_KEY to .env")
@@ -295,7 +301,7 @@ with tab1:
     if show_ta:
         _vis_tickers = df_view["ticker"].tolist()
         with st.spinner(f"Calculating technical signals for {len(_vis_tickers)} positions…"):
-            with ThreadPoolExecutor(max_workers=5) as _ex:
+            with ThreadPoolExecutor(max_workers=3) as _ex:
                 _futures = {t: _ex.submit(get_technical_signals, t) for t in _vis_tickers}
             _ta_map = {t: f.result() for t, f in _futures.items()}
 
@@ -1117,24 +1123,62 @@ with tab7:
 
             st.divider()
 
-            # ── 10 Pillars — two columns ──────────────────────────
-            _ICON = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴", "NA": "⚫"}
-            _p_left, _p_right = st.columns(2)
+            # ── 10 Pillars — scored table ─────────────────────────
+            # direction: what makes the number good
+            # threshold: the cutoffs used to assign GREEN/YELLOW/RED
+            _PMETA = {
+                1:  ("↓ cheaper vs history",  "🟢 below 5yr avg  🟡 within ±10%  🔴 >10% above avg"),
+                2:  ("↑ higher is better",     "🟢 >15%  🟡 10–15%  🔴 <10%"),
+                3:  ("↑ higher is better",     "🟢 >10% CAGR  🟡 5–10%  🔴 <5%"),
+                4:  ("↑ higher is better",     "🟢 >10% CAGR  🟡 5–10%  🔴 <5%"),
+                5:  ("↓ buybacks are better",  "🟢 shrinking  🟡 flat ±2%  🔴 growing (dilution)"),
+                6:  ("↓ less debt is better",  "🟢 <2×  🟡 2–4×  🔴 >4×"),
+                7:  ("↑ higher is better",     "🟢 >10% CAGR  🟡 5–10%  🔴 <5%"),
+                8:  ("↓ cheaper is better",    "🟢 <20×  🟡 20–30×  🔴 >30×"),
+                9:  ("↑ expanding is better",  "🟢 >+2pp  🟡 stable ±2pp  🔴 shrinking"),
+                10: ("↑ beat the index",       "🟢 outperform >5%  🟡 within ±5%  🔴 trail >5%"),
+            }
+            _RBADGE = {
+                "GREEN":  ('<span style="background:#d4edda;color:#155724;padding:3px 10px;'
+                           'border-radius:12px;font-weight:700;font-size:12px">✅ PASS</span>'),
+                "YELLOW": ('<span style="background:#fff3cd;color:#856404;padding:3px 10px;'
+                           'border-radius:12px;font-weight:700;font-size:12px">⚠️ FAIR</span>'),
+                "RED":    ('<span style="background:#f8d7da;color:#721c24;padding:3px 10px;'
+                           'border-radius:12px;font-weight:700;font-size:12px">❌ FAIL</span>'),
+                "NA":     ('<span style="background:#e9ecef;color:#6c757d;padding:3px 10px;'
+                           'border-radius:12px;font-size:12px">— N/A</span>'),
+            }
 
-            for _i, _pillar in enumerate(_result.get("pillars", [])):
-                _tcol = _p_left if _i < 5 else _p_right
-                _icon = _ICON.get(_pillar["rating"], "⚫")
-                with _tcol:
-                    st.markdown(
-                        f"**{_icon} {_pillar['number']}. {_pillar['name']}**"
-                    )
-                    _pv, _pn = st.columns([1, 1])
-                    _pv.code(_pillar["value"], language=None)
-                    _pn.caption(
-                        f"*{_pillar['note']}*"
-                        if _pillar["rating"] == "NA"
-                        else _pillar["note"]
-                    )
+            _tbl_rows = ""
+            for _i, _p in enumerate(_result.get("pillars", [])):
+                _n = _p["number"]
+                _meta_dir, _meta_thr = _PMETA.get(_n, ("", ""))
+                _badge = _RBADGE.get(_p["rating"], _RBADGE["NA"])
+                _row_bg = "#fafafa" if _i % 2 == 0 else "#ffffff"
+                _tbl_rows += (
+                    f'<tr style="background:{_row_bg}">'
+                    f'<td style="color:#999;font-size:11px;padding:8px 6px">{_n}</td>'
+                    f'<td style="padding:8px 6px;font-weight:600">{_p["name"]}</td>'
+                    f'<td style="padding:8px 6px;font-family:monospace;font-size:13px">{_p["value"]}</td>'
+                    f'<td style="padding:8px 6px;text-align:center">{_badge}</td>'
+                    f'<td style="padding:8px 6px;color:#555;font-size:12px">{_meta_dir}</td>'
+                    f'<td style="padding:8px 6px;color:#666;font-size:11px">{_meta_thr}</td>'
+                    f'</tr>'
+                )
+
+            st.markdown(
+                f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+                f'<thead><tr style="background:#1F3864;color:white">'
+                f'<th style="padding:8px 6px;width:3%">#</th>'
+                f'<th style="padding:8px 6px;width:17%">Pillar</th>'
+                f'<th style="padding:8px 6px;width:20%">Value</th>'
+                f'<th style="padding:8px 6px;width:9%;text-align:center">Score</th>'
+                f'<th style="padding:8px 6px;width:14%">Direction</th>'
+                f'<th style="padding:8px 6px;width:37%">Thresholds</th>'
+                f'</tr></thead>'
+                f'<tbody>{_tbl_rows}</tbody></table>',
+                unsafe_allow_html=True,
+            )
 
             st.divider()
 
