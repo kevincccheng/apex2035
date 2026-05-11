@@ -19,7 +19,9 @@ from core.engine import (
     build_portfolio, portfolio_summary, allocation_by,
     concentration_alerts, compliance_check,
     calc_new_avg_cost, target_progress,
+    calculate_pillars,
 )
+from core.exports import export_portfolio_pdf, export_stock_pdf
 
 # ── Page config ───────────────────────────────────────────────────
 st.set_page_config(
@@ -181,13 +183,14 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Master Ledger",
     "🏦 Broker Recon",
     "🎯 Analytics",
     "⚠️ Alerts",
     "✏️ Trade Entry",
     "📄 Export",
+    "📈 Stock Analyzer",
 ])
 
 
@@ -268,6 +271,26 @@ with tab1:
     gl_filt = valid["gl_report"].sum() if "gl_report" in valid else 0
     f3.metric("Filtered G/L", f"{ccy_sym}{gl_filt:,.0f}")
 
+    # PDF export
+    st.divider()
+    _pdf1_col, _ = st.columns([1, 3])
+    with _pdf1_col:
+        if st.button("📄 Generate Portfolio PDF", key="pdf_btn_tab1",
+                     use_container_width=True):
+            with st.spinner("Generating PDF…"):
+                _pdf1 = export_portfolio_pdf(
+                    port_df, summary, fx_rate, report_ccy,
+                    concentration_alerts(port_df),
+                    compliance_check(port_df),
+                )
+            st.download_button(
+                "⬇️ Download PDF",
+                _pdf1,
+                f"apex2035_portfolio_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                "application/pdf",
+                key="dl_pdf_tab1",
+            )
+
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 2 — BROKER RECONCILIATION
@@ -322,6 +345,25 @@ with tab2:
                              use_container_width=True, hide_index=True)
             else:
                 st.caption("No positions recorded for this broker.")
+
+    st.divider()
+    _pdf2_col, _ = st.columns([1, 3])
+    with _pdf2_col:
+        if st.button("📄 Generate Portfolio PDF", key="pdf_btn_tab2",
+                     use_container_width=True):
+            with st.spinner("Generating PDF…"):
+                _pdf2 = export_portfolio_pdf(
+                    port_df, summary, fx_rate, report_ccy,
+                    concentration_alerts(port_df),
+                    compliance_check(port_df),
+                )
+            st.download_button(
+                "⬇️ Download PDF",
+                _pdf2,
+                f"apex2035_portfolio_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                "application/pdf",
+                key="dl_pdf_tab2",
+            )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -417,6 +459,25 @@ with tab3:
     })
     st.dataframe(top10_display, use_container_width=True, hide_index=True)
 
+    st.divider()
+    _pdf3_col, _ = st.columns([1, 3])
+    with _pdf3_col:
+        if st.button("📄 Generate Portfolio PDF", key="pdf_btn_tab3",
+                     use_container_width=True):
+            with st.spinner("Generating PDF…"):
+                _pdf3 = export_portfolio_pdf(
+                    port_df, summary, fx_rate, report_ccy,
+                    concentration_alerts(port_df),
+                    compliance_check(port_df),
+                )
+            st.download_button(
+                "⬇️ Download PDF",
+                _pdf3,
+                f"apex2035_portfolio_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                "application/pdf",
+                key="dl_pdf_tab3",
+            )
+
 
 # ══════════════════════════════════════════════════════════════════
 # TAB 4 — ALERTS (Concentration + Compliance)
@@ -472,6 +533,25 @@ with tab4:
         st.dataframe(no_price, use_container_width=True, hide_index=True)
     else:
         st.success("✅ All positions have live prices.")
+
+    st.divider()
+    _pdf4_col, _ = st.columns([1, 3])
+    with _pdf4_col:
+        if st.button("📄 Generate Portfolio PDF", key="pdf_btn_tab4",
+                     use_container_width=True):
+            with st.spinner("Generating PDF…"):
+                _pdf4 = export_portfolio_pdf(
+                    port_df, summary, fx_rate, report_ccy,
+                    concentration_alerts(port_df),
+                    compliance_check(port_df),
+                )
+            st.download_button(
+                "⬇️ Download PDF",
+                _pdf4,
+                f"apex2035_portfolio_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                "application/pdf",
+                key="dl_pdf_tab4",
+            )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -604,6 +684,25 @@ with tab5:
             st.caption(f"Could not load trade log: {e}")
     else:
         st.caption("Connect Google Sheets to see trade log (see SETUP.md).")
+
+    st.divider()
+    _pdf5_col, _ = st.columns([1, 3])
+    with _pdf5_col:
+        if st.button("📄 Generate Portfolio PDF", key="pdf_btn_tab5",
+                     use_container_width=True):
+            with st.spinner("Generating PDF…"):
+                _pdf5 = export_portfolio_pdf(
+                    port_df, summary, fx_rate, report_ccy,
+                    concentration_alerts(port_df),
+                    compliance_check(port_df),
+                )
+            st.download_button(
+                "⬇️ Download PDF",
+                _pdf5,
+                f"apex2035_portfolio_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                "application/pdf",
+                key="dl_pdf_tab5",
+            )
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -814,3 +913,182 @@ with tab6:
 
         **To save as PDF:** Open in Excel → File → Print → Microsoft Print to PDF
         """)
+
+    st.divider()
+    st.subheader("📄 PDF Report")
+    st.caption("Text-based PDF — selectable, copyable, ready for Claude/Gemini.")
+    pdf6_col, pdf6_info = st.columns([1, 2])
+    with pdf6_col:
+        if st.button("📥 Generate PDF Report", key="pdf_btn_tab6", type="primary",
+                     use_container_width=True):
+            with st.spinner("Generating PDF…"):
+                _pdf6 = export_portfolio_pdf(
+                    port_df, summary, fx_rate, report_ccy,
+                    concentration_alerts(port_df),
+                    compliance_check(port_df),
+                )
+            st.download_button(
+                "⬇️ Download PDF (.pdf)",
+                _pdf6,
+                f"apex2035_portfolio_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                "application/pdf",
+                key="dl_pdf_tab6",
+            )
+    with pdf6_info:
+        st.markdown("""
+        **PDF includes (4 pages):**
+        - **Page 1:** Executive summary — totals, top 5, alerts count
+        - **Page 2:** Allocation by barbell / region / sector
+        - **Page 3:** Full holdings sorted by market value
+        - **Page 4:** Concentration alerts, compliance, missing prices
+        """)
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 7 — STOCK ANALYZER
+# ══════════════════════════════════════════════════════════════════
+with tab7:
+    st.subheader("📈 Stock Analyzer — 10-Pillar Framework")
+    st.caption(
+        "Analyze any ticker across 10 fundamental pillars. "
+        "Works for US stocks (MSFT, AAPL) and HK stocks (0700.HK, 9988.HK)."
+    )
+
+    _a_col1, _a_col2 = st.columns([3, 1])
+    with _a_col1:
+        _aticker = st.text_input(
+            "Ticker symbol",
+            placeholder="e.g. MSFT, 0700.HK, AAPL, 9988.HK, VOO",
+            key="analyzer_ticker_input",
+        )
+    with _a_col2:
+        st.write("")
+        st.write("")
+        _analyze_btn = st.button("🔍 Analyze", type="primary", key="analyze_btn")
+
+    if _analyze_btn and _aticker.strip():
+        _ticker_clean = _aticker.strip().upper()
+
+        with st.spinner(f"Analyzing {_ticker_clean}… fetching financials (10–20 s)"):
+            _result = calculate_pillars(_ticker_clean)
+
+        if _result.get("error"):
+            st.error(f"❌ {_result['error']}")
+            st.caption(
+                "Tips: Check the symbol. HK stocks need .HK suffix (e.g. 0700.HK). "
+                "ETFs return N/A for most fundamental pillars — that is expected."
+            )
+        else:
+            # ── Company Header ────────────────────────────────────
+            _info = _result["company_info"]
+            _is_hk = _ticker_clean.endswith(".HK")
+            _px_sym = "HK$" if _is_hk else "$"
+
+            _h1, _h2, _h3, _h4 = st.columns(4)
+            _h1.metric("Company",    str(_info.get("name", "N/A"))[:30])
+            _h2.metric("Sector",     str(_info.get("sector") or "N/A")[:25])
+            _mc = _info.get("market_cap")
+            if _mc:
+                _mc_str = (f"${_mc/1e12:.1f}T" if _mc >= 1e12
+                           else f"${_mc/1e9:.1f}B" if _mc >= 1e9
+                           else f"${_mc/1e6:.0f}M")
+            else:
+                _mc_str = "N/A"
+            _h3.metric("Market Cap", _mc_str)
+            _px = _info.get("price")
+            _h4.metric("Price", f"{_px_sym}{_px:,.2f}" if _px else "N/A")
+
+            _w52h = _info.get("week_52_high")
+            _w52l = _info.get("week_52_low")
+            if _w52h and _w52l:
+                st.caption(
+                    f"52-week: {_px_sym}{_w52l:,.2f} – {_px_sym}{_w52h:,.2f}  "
+                    f"|  Currency: {_info.get('currency', 'USD')}"
+                )
+            st.divider()
+
+            # ── Overall Verdict ───────────────────────────────────
+            _score   = _result["score"]
+            _verdict = _result["verdict"]
+            _vstyle  = {
+                "CHEAP":     ("#d4edda", "#1a5c2a", "🟢 CHEAP"),
+                "FAIR":      ("#fff3cd", "#856404", "🟡 FAIR"),
+                "EXPENSIVE": ("#f8d7da", "#721c24", "🔴 EXPENSIVE"),
+            }
+            _vbg, _vtc, _vlabel = _vstyle.get(_verdict, ("#f5f5f5", "#333", f"⚫ {_verdict}"))
+
+            _v1, _v2 = st.columns([3, 1])
+            with _v1:
+                st.markdown(
+                    f'<div style="background:{_vbg};border-radius:8px;'
+                    f'padding:12px 18px;">'
+                    f'<span style="font-size:1.4em;font-weight:700;'
+                    f'color:{_vtc}">{_vlabel}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _v2:
+                st.metric("Pillars Passing", f"{_score} / 10")
+
+            st.divider()
+
+            # ── 10 Pillars — two columns ──────────────────────────
+            _ICON = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴", "NA": "⚫"}
+            _p_left, _p_right = st.columns(2)
+
+            for _i, _pillar in enumerate(_result.get("pillars", [])):
+                _tcol = _p_left if _i < 5 else _p_right
+                _icon = _ICON.get(_pillar["rating"], "⚫")
+                with _tcol:
+                    st.markdown(
+                        f"**{_icon} {_pillar['number']}. {_pillar['name']}**"
+                    )
+                    _pv, _pn = st.columns([1, 1])
+                    _pv.code(_pillar["value"], language=None)
+                    _pn.caption(
+                        f"*{_pillar['note']}*"
+                        if _pillar["rating"] == "NA"
+                        else _pillar["note"]
+                    )
+
+            st.divider()
+
+            # ── Watchlist + PDF ───────────────────────────────────
+            _wl_col, _pdf_col = st.columns(2)
+            with _wl_col:
+                if SHEETS_AVAILABLE:
+                    if st.button("📌 Add to Watchlist", key="add_watchlist_btn"):
+                        from core.sheets import append_watchlist
+                        _wl_res = append_watchlist(
+                            _ticker_clean,
+                            _info.get("price"),
+                            _score,
+                            _verdict,
+                        )
+                        if _wl_res is True:
+                            st.success(
+                                f"✅ {_ticker_clean} added to Watchlist "
+                                f"in Google Sheets!"
+                            )
+                        else:
+                            st.error(f"Watchlist error: {_wl_res}")
+                else:
+                    st.caption(
+                        "⚠️ Connect Google Sheets to use the watchlist feature."
+                    )
+
+            with _pdf_col:
+                if st.button("📄 Generate Stock PDF", key="stock_pdf_btn"):
+                    with st.spinner("Generating PDF…"):
+                        _spdf = export_stock_pdf(_ticker_clean, _result)
+                    st.download_button(
+                        "⬇️ Download Stock PDF",
+                        _spdf,
+                        f"apex2035_stock_{_ticker_clean}_"
+                        f"{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                        "application/pdf",
+                        key="dl_stock_pdf",
+                    )
+
+    elif _analyze_btn:
+        st.warning("Please enter a ticker symbol.")

@@ -217,3 +217,32 @@ def read_broker_snapshots() -> pd.DataFrame:
     if not data:
         return pd.DataFrame(columns=SNAPSHOT_COLS)
     return pd.DataFrame(data)
+
+
+# ── Watchlist ─────────────────────────────────────────────────────
+WATCHLIST_COLS = ["ticker", "date_added", "price", "score", "verdict"]
+
+def append_watchlist(ticker: str, price, score: int, verdict: str):
+    """
+    Appends a ticker to the Watchlist tab (creates the tab if missing).
+    Returns True on success, error string on failure.
+    """
+    try:
+        client = get_client()
+        wb     = client.open(GSHEET_NAME)
+        try:
+            ws = wb.worksheet("Watchlist")
+        except gspread.exceptions.WorksheetNotFound:
+            ws = wb.add_worksheet("Watchlist", rows=1000, cols=10)
+            ws.append_row(WATCHLIST_COLS)
+        row = [
+            ticker,
+            datetime.date.today().isoformat(),
+            float(price) if price else "",
+            int(score),
+            verdict,
+        ]
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        return True
+    except Exception as e:
+        return str(e)
