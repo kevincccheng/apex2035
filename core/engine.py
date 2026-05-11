@@ -540,12 +540,21 @@ def calculate_pillars(ticker_sym: str, use_lseg: bool = False) -> dict:
     if use_lseg:
         try:
             from core.lseg_data import get_fundamentals_lseg, get_historical_pe_lseg
-            lseg_data = get_fundamentals_lseg(ticker_sym)
+            # Convert yfinance ticker to LSEG RIC format
+            # HK stocks already have .HK; US stocks need .O (NASDAQ) or .N (NYSE)
+            if "." in ticker_sym:
+                lseg_ric = ticker_sym          # 0700.HK — already correct
+            else:
+                lseg_ric = ticker_sym + ".O"   # try NASDAQ first
+            lseg_data = get_fundamentals_lseg(lseg_ric)
+            if not lseg_data:                  # fallback: NYSE
+                lseg_ric = ticker_sym + ".N"
+                lseg_data = get_fundamentals_lseg(lseg_ric)
             if lseg_data:
                 # Pillar 1: P/E if N/A from yfinance
                 if pillars[0]["rating"] == "NA" and "pe_ratio" in lseg_data:
                     lpe = lseg_data["pe_ratio"]
-                    lhist = get_historical_pe_lseg(ticker_sym, 5)
+                    lhist = get_historical_pe_lseg(lseg_ric, 5)
                     lavg  = sum(lhist) / len(lhist) if lhist else None
                     if lpe and lavg:
                         diff = (lpe - lavg) / lavg * 100
@@ -562,7 +571,7 @@ def calculate_pillars(ticker_sym: str, use_lseg: bool = False) -> dict:
                     elif lpe:
                         pillars[0].update({"value": f"{lpe:.1f}x (5yr avg: N/A) [LSEG]"})
 
-                # Pillar 2: ROIC if N/A from yfinance
+                # Pillar 2: ROIC — lseg_data already uses lseg_ric from above
                 if pillars[1]["rating"] == "NA" and "roic" in lseg_data:
                     roic = lseg_data["roic"]
                     if roic > 15:
