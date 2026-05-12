@@ -1,102 +1,74 @@
-# core/lseg_data.py — LSEG EDP data integration (supplements yfinance)
-# Requires Refinitiv Workspace desktop app running locally (localhost:9000).
-# Falls back to yfinance gracefully when Workspace is closed.
+# core/lseg_data.py — LSEG Desktop Session integration (local only)
+# Requires Refinitiv Workspace to be running on this PC (localhost:9000).
+# On Streamlit Cloud or without Workspace: all functions return {} / False safely.
+# DO NOT add LSEG credentials here — desktop session only, no platform/RDP.
 
-import os
 import streamlit as st
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
-
-def get_edp_key() -> str | None:
-    key = os.getenv("EDP_API_KEY")
-    if not key:
-        try:
-            key = st.secrets.get("EDP_API_KEY")
-        except Exception:
-            pass
-    return key or None
-
-
-def lseg_available() -> bool:
-    """True if EDP_API_KEY is configured (key present, doesn't test connectivity)."""
-    return bool(get_edp_key())
-
-
-@st.cache_resource(ttl=120)
-def _get_lseg_module():
-    """
-    Import and open an LSEG session once per process.
-    Returns (module, True) only when the session is actually Opened.
-    Requires Refinitiv Workspace / Eikon desktop app to be running.
-    """
-    key = get_edp_key()
-    if not key:
-        return None, False
-
-    for _lib in ("lseg.data", "refinitiv.data"):
+def _import_lseg_lib():
+    """Return the first available LSEG/Refinitiv data module, or None."""
+    for lib_name in ("lseg.data", "refinitiv.data"):
         try:
             import importlib
-            ld = importlib.import_module(_lib)
-            ld.open_session(app_key=key)
-            # Verify the session is actually open (not just attempted)
-            sess = ld.session.get_default()
-            state = str(getattr(sess, "open_state", ""))
-            if "Opened" not in state:
-                continue
-            return ld, True
+            return importlib.import_module(lib_name)
         except Exception:
-            continue
+            pass
+    return None
 
+
+@st.cache_resource(ttl=60)
+def _open_desktop_session():
+    """
+    Try to open a desktop session via Workspace proxy (localhost:9000).
+    Returns (module, True) if connected, (None, False) otherwise.
+    Cached 60 s so the sidebar check doesn't hit the network every rerun.
+    """
+    lib = _import_lseg_lib()
+    if lib is None:
+        return None, False
+    try:
+        lib.open_session()          # Desktop session — no credentials needed
+        sess = lib.session.get_default()
+        if "Opened" in str(getattr(sess, "open_state", "")):
+            return lib, True
+    except Exception:
+        pass
     return None, False
 
 
-def lseg_connected() -> bool:
-    """True only when the LSEG session is open and Workspace is running."""
-    _, ok = _get_lseg_module()
+def lseg_desktop_available() -> bool:
+    """True only when Refinitiv Workspace is running and the session is open."""
+    _, ok = _open_desktop_session()
     return ok
 
 
+# Backward-compat aliases used elsewhere in the app
+def lseg_available() -> bool:
+    return lseg_desktop_available()
+
+
+def lseg_connected() -> bool:
+    return lseg_desktop_available()
+
+
 def refresh_lseg():
-    """Force re-check of LSEG connection on next call (use after opening Workspace)."""
-    _get_lseg_module.clear()
+    """Force re-check of Workspace connection on next call."""
+    _open_desktop_session.clear()
 
 
-def _extract(data, col_name: str):
-    """Safely extract a float from a get_data result column."""
-    try:
-        # Column headers from get_data are verbose names, not field codes.
-        # Search by substring match against known verbose names.
-        matching = [c for c in data.columns if c != "Instrument"]
-        # Try exact match first, then first non-instrument column
-        val = data.iloc[0].get(col_name)
-        if val is None:
-            return None
-        s = str(val)
-        if s in ("nan", "None", "<NA>", ""):
-            return None
-        return float(val)
-    except Exception:
-        return None
-
+# ── Data fetching (only called when lseg_desktop_available() is True) ──────
 
 def get_fundamentals_lseg(ticker: str) -> dict:
     """
-    Fetch snapshot fundamentals from LSEG EDP using confirmed working fields.
-    Returns dict with standardised keys; returns {} on any failure.
-
-    Confirmed working fields (tested 2026-05-11):
-      TR.EBITActValue, TR.TotalRevenue, TR.NetIncome, TR.FreeCashFlow,
-      TR.GrossProfit, TR.GrossMargin, TR.TotalDebt, TR.CashAndSTInvestments,
-      TR.SharesOutstanding, TR.EVToEBITDA, TR.EPSMean, TR.PriceClose
+    Fetch snapshot fundamentals from LSEG EDP via Workspace desktop session.
+    Returns dict with keys: ebit, revenue, net_income, fcf, gross_profit,
+    gross_margin, total_debt, cash, shares, ev_ebitda, eps_mean, price, pe_ratio
+    Returns {} on any failure.
     """
     try:
-        rd, ok = _get_lseg_module()
-        if not ok or rd is None:
+        lib, ok = _open_desktop_session()
+        if not ok or lib is None:
             return {}
 
         fields = [
@@ -113,28 +85,12 @@ def get_fundamentals_lseg(ticker: str) -> dict:
             "TR.EPSMean",
             "TR.PriceClose",
         ]
-        data = rd.get_data(universe=[ticker], fields=fields)
+        data = lib.get_data(universe=[ticker], fields=fields)
         if data is None or data.empty:
             return {}
 
-        row = data.iloc[0]
-        result = {}
-
-        def _v(col_substr):
-            for col in data.columns:
-                if col == "Instrument":
-                    continue
-                v = row.get(col)
-                if v is None or str(v) in ("nan", "None", "<NA>", ""):
-                    continue
-                try:
-                    return float(v)
-                except Exception:
-                    pass
-            return None
-
-        # Map each field by iterating get_data result columns in order
         col_keys = [c for c in data.columns if c != "Instrument"]
+        row = data.iloc[0]
         field_map = {
             "TR.EBITActValue":         "ebit",
             "TR.TotalRevenue":         "revenue",
@@ -149,96 +105,39 @@ def get_fundamentals_lseg(ticker: str) -> dict:
             "TR.EPSMean":              "eps_mean",
             "TR.PriceClose":           "price",
         }
-        # get_data returns columns in the same order as fields requested
+        result = {}
         for i, field_code in enumerate(fields):
             if i >= len(col_keys):
                 break
-            col = col_keys[i]
             key_name = field_map.get(field_code)
             if not key_name:
                 continue
-            v = row.get(col)
+            v = row.get(col_keys[i])
             if v is not None and str(v) not in ("nan", "None", "<NA>", ""):
                 try:
                     result[key_name] = float(v)
                 except Exception:
                     pass
 
-        # Derived: P/E from price / eps_mean
         if "price" in result and "eps_mean" in result and result["eps_mean"] > 0:
             result["pe_ratio"] = result["price"] / result["eps_mean"]
 
         return result
-
     except Exception:
         return {}
 
 
-def get_historical_fundamentals_lseg(ticker: str, years: int = 5) -> list:
-    """
-    Fetch annual fundamental data for past N fiscal years.
-    Returns list of dicts (most recent first): {year, revenue, net_income, fcf,
-    gross_profit, eps}. Returns [] on failure.
-    """
-    try:
-        rd, ok = _get_lseg_module()
-        if not ok or rd is None:
-            return []
-
-        fields = [
-            "TR.TotalRevenue",
-            "TR.NetIncome",
-            "TR.FreeCashFlow",
-            "TR.GrossProfit",
-            "TR.EPSActValue",
-        ]
-        data = rd.get_data(
-            universe=[ticker],
-            fields=fields,
-            parameters={"SDate": f"-{years}Y", "EDate": "0D", "Frq": "FY"},
-        )
-        if data is None or data.empty:
-            return []
-
-        col_keys = [c for c in data.columns if c != "Instrument"]
-        rows = []
-        for i, (_, row_data) in enumerate(data.iterrows()):
-            entry = {"year": years - i}
-            for j, field_code in enumerate(fields):
-                if j >= len(col_keys):
-                    break
-                v = row_data.iloc[j + 1]  # +1 to skip Instrument
-                if v is not None and str(v) not in ("nan", "None", "<NA>", ""):
-                    try:
-                        key_map = {
-                            "TR.TotalRevenue": "revenue",
-                            "TR.NetIncome":    "net_income",
-                            "TR.FreeCashFlow": "fcf",
-                            "TR.GrossProfit":  "gross_profit",
-                            "TR.EPSActValue":  "eps",
-                        }
-                        entry[key_map[field_code]] = float(v)
-                    except Exception:
-                        pass
-            rows.append(entry)
-        return rows
-
-    except Exception:
-        return []
-
-
 def get_historical_pe_lseg(ticker: str, years: int = 5) -> list:
     """
-    Compute annual P/E ratios using LSEG historical EPS + annual close prices.
-    Returns list of P/E floats (oldest→newest); [] on failure.
+    Compute annual P/E from LSEG historical EPS + annual close prices.
+    Returns list of floats (oldest→newest); [] on failure.
     """
     try:
-        rd, ok = _get_lseg_module()
-        if not ok or rd is None:
+        lib, ok = _open_desktop_session()
+        if not ok or lib is None:
             return []
 
-        # Annual EPS history
-        eps_data = rd.get_data(
+        eps_data = lib.get_data(
             universe=[ticker],
             fields=["TR.EPSActValue"],
             parameters={"SDate": f"-{years}Y", "EDate": "0D", "Frq": "FY"},
@@ -247,54 +146,43 @@ def get_historical_pe_lseg(ticker: str, years: int = 5) -> list:
             return []
 
         eps_col = [c for c in eps_data.columns if c != "Instrument"][0]
-        eps_vals = [float(v) for v in eps_data[eps_col]
-                    if v is not None and str(v) not in ("nan", "None", "<NA>", "")
-                    and float(v) > 0]
+        eps_vals = [
+            float(v) for v in eps_data[eps_col]
+            if v is not None and str(v) not in ("nan", "None", "<NA>", "") and float(v) > 0
+        ]
         if not eps_vals:
             return []
 
-        # Annual close prices (TRDPRC_1 works with get_history; TR.PriceClose does not)
-        price_data = rd.get_history(
-            ticker,
-            fields=["TRDPRC_1"],
-            interval="1Y",
-            count=years,
-        )
+        price_data = lib.get_history(ticker, fields=["TRDPRC_1"], interval="1Y", count=years)
         if price_data is None or price_data.empty:
             return []
 
         price_col = price_data.columns[0]
-        price_vals = [float(v) for v in price_data[price_col]
-                      if v is not None and str(v) not in ("nan", "None", "<NA>", "")
-                      and float(v) > 0]
+        price_vals = [
+            float(v) for v in price_data[price_col]
+            if v is not None and str(v) not in ("nan", "None", "<NA>", "") and float(v) > 0
+        ]
         if not price_vals:
             return []
 
-        pe_list = []
-        for p, e in zip(price_vals, eps_vals):
-            if e > 0:
-                pe = p / e
-                if 0 < pe < 1000:
-                    pe_list.append(pe)
-        return pe_list
-
+        return [p / e for p, e in zip(price_vals, eps_vals) if e > 0 and 0 < p / e < 1000]
     except Exception:
         return []
 
 
 def get_price_lseg(ticker: str) -> dict:
-    """Real-time price from LSEG EDP. Returns {} on failure."""
+    """Real-time price from LSEG Workspace. Returns {} on failure."""
     try:
-        rd, ok = _get_lseg_module()
-        if not ok or rd is None:
+        lib, ok = _open_desktop_session()
+        if not ok or lib is None:
             return {}
 
-        data = rd.get_data(universe=[ticker], fields=["TR.PriceClose", "CF_CURRENCY"])
+        data = lib.get_data(universe=[ticker], fields=["TR.PriceClose", "CF_CURRENCY"])
         if data is None or data.empty:
             return {}
 
-        row = data.iloc[0]
         cols = [c for c in data.columns if c != "Instrument"]
+        row   = data.iloc[0]
         price = row.get(cols[0]) if cols else None
         ccy   = row.get(cols[1]) if len(cols) > 1 else "USD"
         return {

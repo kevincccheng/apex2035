@@ -25,7 +25,9 @@ from core.engine import (
 from core.exports import (
     export_portfolio_pdf, export_stock_pdf, export_conviction_pdf,
 )
-from core.lseg_data import lseg_available, lseg_connected, refresh_lseg
+from core.lseg_data import (
+    lseg_available, lseg_connected, lseg_desktop_available, refresh_lseg,
+)
 
 # ── Page config ───────────────────────────────────────────────────
 st.set_page_config(
@@ -149,21 +151,23 @@ with st.sidebar:
     )
 
     st.divider()
-    # LSEG status (data only fetched via explicit button in Stock Analyzer)
-    if lseg_available():
-        _lseg_status_cols = st.columns([3, 1])
-        with _lseg_status_cols[0]:
-            if lseg_connected():
-                st.caption("🟢 LSEG connected")
-            else:
-                st.caption("🔴 LSEG: Workspace not open")
-        with _lseg_status_cols[1]:
-            if st.button("↺", key="lseg_reconnect", help="Reconnect LSEG"):
-                refresh_lseg()
-                st.rerun()
+    # LSEG status — desktop session only, local PC only
+    _lseg_ok = lseg_desktop_available()
+    if _lseg_ok:
+        st.success("🔬 LSEG available")
+        st.caption("Refinitiv Workspace detected")
         _lseg_n = st.session_state.get("lseg_calls", 0)
         if _lseg_n:
             st.caption(f"LSEG calls this session: {_lseg_n}")
+        if st.button("↺ Reconnect LSEG", key="lseg_reconnect"):
+            refresh_lseg()
+            st.rerun()
+    else:
+        st.info("📊 yfinance mode")
+        st.caption(
+            "Open Refinitiv Workspace on this PC "
+            "to enable LSEG data"
+        )
 
     st.divider()
     st.caption(f"Project Apex 2035\nTarget: {ccy_sym}{TARGET_5X_USD:,.0f}\nHK tax: 0% CGT ✓")
@@ -1189,16 +1193,16 @@ with tab7:
         _lseg_btn = st.button(
             "🔬 + LSEG",
             key="lseg_enhance_btn",
-            disabled=not lseg_available(),
+            disabled=not _lseg_ok,
             help=(
-                "Fetches from your corporate LSEG account. Use sparingly."
-                if lseg_available()
-                else "LSEG only available when running the app locally with "
-                     "Refinitiv Workspace open. Not available on the cloud version."
+                "Enhance with LSEG data from Refinitiv Workspace."
+                if _lseg_ok
+                else "Requires Refinitiv Workspace open on this PC. "
+                     "Not available on the cloud version."
             ),
         )
-    if not lseg_available():
-        st.caption("💡 **+ LSEG** only works when running locally with Workspace open.")
+    if not _lseg_ok:
+        st.caption("💡 **+ LSEG** only works locally with Workspace open.")
 
     # ── Handle button clicks ──────────────────────────────────────
     if _analyze_btn and _aticker.strip():
