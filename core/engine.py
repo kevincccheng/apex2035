@@ -732,9 +732,20 @@ def calculate_fair_value(
                   getattr(fast, "shares", 0) or 0)
         px     = float(price) if price else (info.get("currentPrice") or 0)
         ccy    = info.get("currency", "USD")
+        mc     = info.get("marketCap", 0) or 0
 
         if not (rev > 0 and shares > 0 and px > 0):
             return {"error": "Insufficient data (need revenue, shares, current price)"}
+
+        # Sanity-check shares units (guards against rare yfinance scaling issues)
+        if mc > 0:
+            ratio = (shares * px) / mc
+            if ratio > 100 or ratio < 0.01:
+                shares = mc / px  # derive from market cap instead
+
+        # Currency warning for cross-listed stocks (e.g. Tencent: CNY revenue, HKD price)
+        fin_ccy = info.get("financialCurrency") or ccy
+        cross_currency = (fin_ccy != ccy and fin_ccy not in ("", None))
 
         # Project FCF
         projected_fcf = []
@@ -761,6 +772,8 @@ def calculate_fair_value(
             "fair_value_bull":   round(fvps * 1.25, 2),
             "current_price":     round(px, 2),
             "currency":          ccy,
+            "fin_currency":      fin_ccy,
+            "cross_currency":    cross_currency,
             "margin_of_safety":  round(mos, 1),
             "upside_pct":        round((fvps / px - 1) * 100, 1) if px > 0 else 0,
             "verdict": (

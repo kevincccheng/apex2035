@@ -250,6 +250,64 @@ def append_watchlist(ticker: str, price, score: int, verdict: str):
         return str(e)
 
 
+# ── Portfolio History ─────────────────────────────────────────────
+HISTORY_COLS = [
+    "date", "total_mv_usd", "total_cost_usd",
+    "total_gl_usd", "gl_pct", "hkd_usd_rate", "notes",
+]
+_HISTORY_SHEET = "Portfolio_History"
+
+
+def _history_ws():
+    client = get_client()
+    wb = client.open(GSHEET_NAME)
+    try:
+        return wb.worksheet(_HISTORY_SHEET)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = wb.add_worksheet(_HISTORY_SHEET, rows=2000, cols=len(HISTORY_COLS))
+        ws.append_row(HISTORY_COLS)
+        return ws
+
+
+def append_portfolio_snapshot(snapshot: dict):
+    """Save today's portfolio value. Skips silently if today already recorded."""
+    try:
+        ws   = _history_ws()
+        today = datetime.date.today().isoformat()
+        data = ws.get_all_records()
+        if any(r.get("date") == today for r in data):
+            return  # already saved today
+        ws.append_row([
+            today,
+            round(snapshot.get("total_mv_usd",   0), 2),
+            round(snapshot.get("total_cost_usd",  0), 2),
+            round(snapshot.get("total_gl_usd",    0), 2),
+            round(snapshot.get("gl_pct",          0), 4),
+            round(snapshot.get("hkd_usd_rate", 7.834), 4),
+            snapshot.get("notes", ""),
+        ], value_input_option="USER_ENTERED")
+    except Exception:
+        pass  # never crash the app for a snapshot
+
+
+@st.cache_data(ttl=300)
+def read_portfolio_history() -> "pd.DataFrame":
+    try:
+        ws   = _history_ws()
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame(columns=HISTORY_COLS)
+        df = pd.DataFrame(data)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        for col in ["total_mv_usd", "total_cost_usd", "total_gl_usd",
+                    "gl_pct", "hkd_usd_rate"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df.sort_values("date").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=HISTORY_COLS)
+
+
 # ── Conviction Log ────────────────────────────────────────────────
 CONVICTION_COLS = [
     "conviction_id", "entry_date", "ticker", "name", "action",

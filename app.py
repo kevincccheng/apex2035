@@ -76,7 +76,10 @@ st.markdown("""
 SHEETS_AVAILABLE = "gcp_service_account" in st.secrets
 
 if SHEETS_AVAILABLE:
-    from core.sheets import read_holdings, append_trades, read_trades
+    from core.sheets import (
+        read_holdings, append_trades, read_trades,
+        append_portfolio_snapshot, read_portfolio_history,
+    )
 
     @st.cache_resource
     def init_connections():
@@ -182,6 +185,21 @@ def load_data(report_ccy: str):
     summary = portfolio_summary(port_df, report_ccy)
     progress = target_progress(summary["total_mv"] if report_ccy == "USD"
                                else summary["total_mv"] / fx_rate)
+    # Auto-save daily snapshot (silently — never crashes app)
+    if SHEETS_AVAILABLE:
+        try:
+            mv_usd = summary["total_mv"] if report_ccy == "USD" else summary["total_mv"] / fx_rate
+            append_portfolio_snapshot({
+                "total_mv_usd":   mv_usd,
+                "total_cost_usd": summary["total_cost"] if report_ccy == "USD"
+                                  else summary["total_cost"] / fx_rate,
+                "total_gl_usd":   summary["total_gl"] if report_ccy == "USD"
+                                  else summary["total_gl"] / fx_rate,
+                "gl_pct":         summary["total_gl_pct"],
+                "hkd_usd_rate":   fx_rate,
+            })
+        except Exception:
+            pass
     return port_df, summary, progress, fx_rate
 
 
@@ -554,6 +572,111 @@ with tab3:
         "Region":    top10["region"],
     })
     st.dataframe(top10_display, use_container_width=True, hide_index=True)
+
+    # ── Portfolio Value Over Time ─────────────────────────────────
+    st.divider()
+    st.subheader("📈 Portfolio Value Over Time")
+
+    if SHEETS_AVAILABLE:
+        _hist = read_portfolio_history()
+
+        if len(_hist) < 2:
+            st.info(
+                "Portfolio history builds automatically each day you open the app. "
+                "Come back tomorrow for your first chart — or click the button below "
+                "to save today's snapshot now."
+            )
+            if st.button("📸 Save today's snapshot", key="snap_now_inline"):
+                try:
+                    _mv_usd = summary["total_mv"] if report_ccy == "USD" else summary["total_mv"] / fx_rate
+                    append_portfolio_snapshot({
+                        "total_mv_usd":   _mv_usd,
+                        "total_cost_usd": summary["total_cost"] if report_ccy == "USD"
+                                          else summary["total_cost"] / fx_rate,
+                        "total_gl_usd":   summary["total_gl"] if report_ccy == "USD"
+                                          else summary["total_gl"] / fx_rate,
+                        "gl_pct":         summary["total_gl_pct"],
+                        "hkd_usd_rate":   fx_rate,
+                    })
+                    read_portfolio_history.clear()
+                    st.success("Snapshot saved! Reload the page to see the chart.")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Save failed: {_e}")
+        else:
+            # Main chart
+            _fig_hist = go.Figure()
+            _fig_hist.add_trace(go.Scatter(
+                x=_hist["date"], y=_hist["total_mv_usd"],
+                name="Portfolio Value",
+                line=dict(color="#2E75B6", width=2),
+                fill="tozeroy", fillcolor="rgba(46,117,182,0.1)",
+            ))
+            _fig_hist.add_trace(go.Scatter(
+                x=_hist["date"], y=_hist["total_cost_usd"],
+                name="Cost Basis",
+                line=dict(color="#888", width=1, dash="dash"),
+            ))
+            _fig_hist.add_hline(
+                y=13_350_000,
+                line_dash="dot", line_color="green",
+                annotation_text="5x Target $13.35M",
+                annotation_position="bottom right",
+            )
+            _fig_hist.update_layout(
+                title="Portfolio Value vs Cost Basis (USD)",
+                xaxis_title="Date", yaxis_title="Value (USD)",
+                hovermode="x unified", height=420,
+                legend=dict(orientation="h", y=1.05),
+            )
+            st.plotly_chart(_fig_hist, use_container_width=True)
+
+            # Stats row
+            _h_first = _hist.iloc[0]
+            _h_last  = _hist.iloc[-1]
+            _h_days  = (_h_last["date"] - _h_first["date"]).days
+            _h_chg   = _h_last["total_mv_usd"] - _h_first["total_mv_usd"]
+            _h_ptt   = _h_last["total_mv_usd"] / 13_350_000 * 100
+
+            _hc1, _hc2, _hc3, _hc4 = st.columns(4)
+            _hc1.metric("Tracking since", f"{_h_days} days")
+            _hc2.metric("Change since first record", f"${_h_chg:+,.0f}")
+            _hc3.metric("Progress to 5x target",    f"{_h_ptt:.1f}%")
+            _hc4.metric("Snapshots saved",           len(_hist))
+
+            # Manual snapshot + raw data
+            _snap_col, _data_col = st.columns([1, 2])
+            with _snap_col:
+                if st.button("📸 Save snapshot now", key="snap_manual"):
+                    try:
+                        _mv_usd2 = (summary["total_mv"] if report_ccy == "USD"
+                                    else summary["total_mv"] / fx_rate)
+                        append_portfolio_snapshot({
+                            "total_mv_usd":   _mv_usd2,
+                            "total_cost_usd": summary["total_cost"] if report_ccy == "USD"
+                                              else summary["total_cost"] / fx_rate,
+                            "total_gl_usd":   summary["total_gl"] if report_ccy == "USD"
+                                              else summary["total_gl"] / fx_rate,
+                            "gl_pct":         summary["total_gl_pct"],
+                            "hkd_usd_rate":   fx_rate,
+                        })
+                        read_portfolio_history.clear()
+                        st.success("Snapshot saved!")
+                        st.rerun()
+                    except Exception as _e:
+                        st.error(f"Save failed: {_e}")
+
+            with _data_col:
+                with st.expander("View history data"):
+                    _hdisp = _hist.copy()
+                    _hdisp["date"]          = _hdisp["date"].dt.strftime("%Y-%m-%d")
+                    _hdisp["total_mv_usd"]  = _hdisp["total_mv_usd"].apply(lambda x: f"${x:,.0f}")
+                    _hdisp["total_cost_usd"]= _hdisp["total_cost_usd"].apply(lambda x: f"${x:,.0f}")
+                    _hdisp["gl_pct"]        = _hdisp["gl_pct"].apply(lambda x: f"{x:.2f}%")
+                    st.dataframe(_hdisp[["date","total_mv_usd","total_cost_usd","gl_pct"]],
+                                 use_container_width=True, hide_index=True)
+    else:
+        st.caption("Connect Google Sheets to enable portfolio history tracking.")
 
     st.divider()
     _pdf3_col, _ = st.columns([1, 3])
@@ -1204,16 +1327,18 @@ with tab7:
                 with _fv1:
                     _fv_rev_g  = st.slider("Revenue Growth (%/yr)", -5, 50, 10,
                                             help="Expected annual revenue growth next 5 years")
-                    _fv_pm     = st.slider("Target Profit Margin (%)", 0, 50, 20,
+                    _fv_pm     = st.slider("Target Profit Margin (%)", 0, 50, 25,
                                             help="Expected net profit margin at exit")
                 with _fv2:
-                    _fv_fcf_m  = st.slider("FCF Margin (%)", 0, 50, 15,
+                    _fv_fcf_m  = st.slider("FCF Margin (%)", 0, 50, 20,
                                             help="Free cash flow as % of revenue")
-                    _fv_rr     = st.slider("Required Return (%)", 5, 30, 15,
-                                            help="Your hurdle rate. Higher = more conservative.")
+                    _fv_rr     = st.slider("Required Return (%)", 5, 30, 10,
+                                            help="Your hurdle rate. Higher = more conservative. "
+                                                 "10% is typical for equities.")
                 with _fv3:
-                    _fv_tpe    = st.slider("Terminal P/E Multiple", 5, 50, 20,
-                                            help="P/E you'd sell at in year N")
+                    _fv_tpe    = st.slider("Terminal P/E Multiple", 5, 50, 25,
+                                            help="P/E you'd exit at in year N. "
+                                                 "25x is reasonable for quality compounders.")
                     _fv_yrs    = st.radio("Projection Years", [3, 5, 10],
                                            index=1, horizontal=True)
 
@@ -1232,6 +1357,14 @@ with tab7:
                     st.error(f"Could not calculate: {_fv['error']}")
                 else:
                     _fv_sym = "HK$" if _ticker_clean.endswith(".HK") else "$"
+                    if _fv.get("cross_currency"):
+                        st.warning(
+                            f"⚠️ Note: This company reports financials in "
+                            f"**{_fv.get('fin_currency')}** but trades in "
+                            f"**{_fv.get('currency')}**. "
+                            f"Fair value is calculated in reporting currency — "
+                            f"treat as approximate."
+                        )
                     _fc1, _fc2, _fc3, _fc4 = st.columns(4)
                     _fc1.metric("Bear Case",  f"{_fv_sym}{_fv['fair_value_bear']:,.2f}")
                     _fc2.metric("Base Case",  f"{_fv_sym}{_fv['fair_value_base']:,.2f}",
