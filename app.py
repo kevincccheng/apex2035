@@ -1190,8 +1190,15 @@ with tab7:
             "🔬 + LSEG",
             key="lseg_enhance_btn",
             disabled=not lseg_available(),
-            help="Fetches from your corporate LSEG account. Use sparingly.",
+            help=(
+                "Fetches from your corporate LSEG account. Use sparingly."
+                if lseg_available()
+                else "LSEG only available when running the app locally with "
+                     "Refinitiv Workspace open. Not available on the cloud version."
+            ),
         )
+    if not lseg_available():
+        st.caption("💡 **+ LSEG** only works when running locally with Workspace open.")
 
     # ── Handle button clicks ──────────────────────────────────────
     if _analyze_btn and _aticker.strip():
@@ -1321,6 +1328,86 @@ with tab7:
             # ── Fair Value Calculator ─────────────────────────────
             st.subheader("💰 Fair Value Estimator")
             st.caption("Paul Gabrail / Everything Money DCF methodology. Adjust to match your thesis.")
+
+            # ── Reference data panel ──────────────────────────────
+            _hist_data = _result.get("historical", [])
+            if _hist_data:
+                with st.expander("📊 Actual company data — use as reference for your sliders",
+                                  expanded=True):
+                    # Compute actual metrics from historical data
+                    def _avg(lst):
+                        lst = [x for x in lst if x is not None]
+                        return sum(lst) / len(lst) if lst else None
+
+                    _rev_vals  = [h.get("revenue")    for h in _hist_data]
+                    _ni_vals   = [h.get("net_income")  for h in _hist_data]
+                    _fcf_vals  = [h.get("fcf")         for h in _hist_data]
+                    _gm_vals   = [h.get("gross_margin_pct") for h in _hist_data]
+
+                    # Revenue growth YoY
+                    _rev_g_yoy = []
+                    for _i in range(len(_rev_vals) - 1):
+                        _r0 = _rev_vals[_i + 1]  # older
+                        _r1 = _rev_vals[_i]       # newer
+                        if _r0 and _r1 and _r0 > 0:
+                            _rev_g_yoy.append((_r1 / _r0 - 1) * 100)
+
+                    # Margins from latest and average
+                    _fcf_margins = [
+                        f / r * 100 for f, r in zip(_fcf_vals, _rev_vals)
+                        if f and r and r > 0
+                    ]
+                    _ni_margins = [
+                        n / r * 100 for n, r in zip(_ni_vals, _rev_vals)
+                        if n and r and r > 0
+                    ]
+
+                    # Current P/E from Pillar 1 value string
+                    _p1_val = _result["pillars"][0]["value"] if _result.get("pillars") else ""
+                    _cur_pe_str = _p1_val.split("x")[0] if "x" in _p1_val else "N/A"
+                    try:
+                        _cur_pe = float(_cur_pe_str)
+                    except Exception:
+                        _cur_pe = None
+
+                    def _fmt(v, suffix="%", decimals=1):
+                        return f"{v:.{decimals}f}{suffix}" if v is not None else "N/A"
+
+                    _ref_cols = st.columns(5)
+                    _ref_cols[0].metric(
+                        "Rev Growth",
+                        _fmt(_rev_g_yoy[0] if _rev_g_yoy else None),
+                        f"avg {_fmt(_avg(_rev_g_yoy))} / {len(_rev_g_yoy)}yr",
+                        help="Most recent year-on-year revenue growth"
+                    )
+                    _ref_cols[1].metric(
+                        "FCF Margin",
+                        _fmt(_fcf_margins[0] if _fcf_margins else None),
+                        f"avg {_fmt(_avg(_fcf_margins))} / {len(_fcf_margins)}yr",
+                        help="Free cash flow as % of revenue"
+                    )
+                    _ref_cols[2].metric(
+                        "Net Margin",
+                        _fmt(_ni_margins[0] if _ni_margins else None),
+                        f"avg {_fmt(_avg(_ni_margins))} / {len(_ni_margins)}yr",
+                        help="Net income as % of revenue"
+                    )
+                    _ref_cols[3].metric(
+                        "Gross Margin",
+                        _fmt(_gm_vals[0] if _gm_vals else None),
+                        f"avg {_fmt(_avg(_gm_vals))} / {len(_gm_vals)}yr",
+                        help="Gross profit as % of revenue"
+                    )
+                    _ref_cols[4].metric(
+                        "Current P/E",
+                        f"{_cur_pe:.1f}×" if _cur_pe else "N/A",
+                        help="Trailing P/E — use as anchor for terminal P/E"
+                    )
+                    st.caption(
+                        "💡 Use these as starting points. "
+                        "Your sliders should reflect your *expectations*, not just history. "
+                        "For terminal P/E: quality compounders typically trade at 20–35×."
+                    )
 
             with st.expander("⚙️ Set Your Assumptions", expanded=True):
                 _fv1, _fv2, _fv3 = st.columns(3)
