@@ -1060,6 +1060,8 @@ with tab7:
 
     if _analyze_btn and _aticker.strip():
         _ticker_clean = _aticker.strip().upper()
+        # Always clear this ticker's cached result so LSEG data is fresh
+        calculate_pillars.clear()
 
         with st.spinner(f"Analyzing {_ticker_clean}… fetching financials (10–20 s)"):
             _result = calculate_pillars(_ticker_clean, use_lseg)
