@@ -315,10 +315,11 @@ def export_portfolio_pdf(port_df: pd.DataFrame,
 # ══════════════════════════════════════════════════════════════════
 # STOCK ANALYZER PDF
 # ══════════════════════════════════════════════════════════════════
-def export_stock_pdf(ticker: str, result: dict) -> bytes:
+def export_stock_pdf(ticker: str, result: dict, fair_value: dict = None) -> bytes:
     """
-    Generates a 3-page stock analysis PDF with selectable text.
-    Pages: Company Overview + Verdict | 10-Pillar Scorecard | Historical Data
+    Generates a stock analysis PDF (3 pages + optional fair value page).
+    Pages: Company Overview + Verdict | 10-Pillar Scorecard |
+           Historical Data | Fair Value (if provided)
     """
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -448,6 +449,55 @@ def export_stock_pdf(ticker: str, result: dict) -> bytes:
                    colWidths=[0.55*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.05*inch, 1.0*inch])
         th.setStyle(_tbl_style(len(h_data)))
         story.append(th)
+
+    # ── PAGE 4 (optional): Fair Value ────────────────────────────
+    if fair_value and "error" not in fair_value:
+        story.append(PageBreak())
+        story.append(Paragraph("Fair Value Analysis", st["title"]))
+        story.append(Paragraph(
+            "DCF model — Paul Gabrail / Everything Money methodology.",
+            st["small"]))
+        story.append(Spacer(1, 0.1*inch))
+
+        fv_sym = "HK$" if ticker.endswith(".HK") else "$"
+        fv_rows = [
+            ["Metric", "Value"],
+            ["Current Price",    f"{fv_sym}{fair_value['current_price']:,.2f}"],
+            ["Bear Case (−25%)", f"{fv_sym}{fair_value['fair_value_bear']:,.2f}"],
+            ["Base Case",        f"{fv_sym}{fair_value['fair_value_base']:,.2f}"],
+            ["Bull Case (+25%)", f"{fv_sym}{fair_value['fair_value_bull']:,.2f}"],
+            ["Upside vs Current",f"{fair_value['upside_pct']:+.1f}%"],
+            ["Margin of Safety", f"{fair_value['margin_of_safety']:+.1f}%"],
+            ["Verdict",          fair_value["verdict"]],
+        ]
+        tfv = Table(fv_rows, colWidths=[2.5*inch, 2.5*inch])
+        fvs = _tbl_style(len(fv_rows))
+        vdict = {"UNDERVALUED": _GREEN_BG, "FAIRLY VALUED": _YELLOW_BG,
+                  "OVERVALUED": _RED_BG}
+        vbg = vdict.get(fair_value["verdict"], _LIGHT_GREY)
+        fvs.add("BACKGROUND", (0, len(fv_rows)-1), (-1, len(fv_rows)-1), vbg)
+        fvs.add("FONTNAME",   (0, len(fv_rows)-1), (-1, len(fv_rows)-1), "Helvetica-Bold")
+        tfv.setStyle(fvs)
+        story.append(Paragraph("Valuation Summary", st["heading"]))
+        story.append(tfv)
+        story.append(Spacer(1, 0.15*inch))
+
+        # Assumptions
+        a = fair_value.get("assumptions", {})
+        if a:
+            story.append(Paragraph("Assumptions Used", st["heading"]))
+            a_rows = [
+                ["Parameter", "Value"],
+                ["Revenue Growth / yr",  f"{a.get('revenue_growth_rate', 0):.0f}%"],
+                ["Target Profit Margin", f"{a.get('target_profit_margin', 0):.0f}%"],
+                ["FCF Margin",           f"{a.get('target_fcf_margin', 0):.0f}%"],
+                ["Required Return",      f"{a.get('required_return', 0):.0f}%"],
+                ["Terminal P/E",         f"{a.get('terminal_pe', 0):.0f}×"],
+                ["Projection Years",     str(a.get("years", 5))],
+            ]
+            ta = Table(a_rows, colWidths=[2.5*inch, 2.0*inch])
+            ta.setStyle(_tbl_style(len(a_rows), hdr_color=_MID_BLUE))
+            story.append(ta)
 
     doc.build(story)
     return buf.getvalue()

@@ -96,6 +96,7 @@ def get_prices_batch(tickers: tuple) -> dict:
             auto_adjust=True,
             progress=False,
             threads=True,
+            timeout=30,
         )
         close = data["Close"] if "Close" in data else data
 

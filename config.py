@@ -30,7 +30,7 @@ COMPLIANCE = {
 
 # ── Price source ──────────────────────────────────────────────────
 PRICE_SOURCE  = "yfinance"   # "yfinance" | "lseg" — swap here only
-PRICE_CACHE_S = 300          # cache prices for 5 minutes
+PRICE_CACHE_S = 3600         # cache prices for 1 hour (manual refresh always available)
 
 # ── Google Sheets ─────────────────────────────────────────────────
 GSHEET_NAME            = "Apex2035_Master"

@@ -697,3 +697,85 @@ def get_technical_signals(ticker_sym: str) -> dict:
         }
     except Exception:
         return {}
+
+
+# ── Fair Value Calculator (DCF — Paul Gabrail methodology) ────────
+def calculate_fair_value(
+    ticker: str,
+    revenue_growth_rate: float,
+    target_profit_margin: float,
+    target_fcf_margin: float,
+    required_return: float,
+    terminal_pe: float,
+    years: int = 5,
+) -> dict:
+    """
+    Projects FCF forward N years and discounts back.
+    Returns bear / base / bull fair values per share.
+    """
+    try:
+        import time as _t
+        tk    = yf.Ticker(ticker)
+        fast  = tk.fast_info
+        price = getattr(fast, "last_price", None) or getattr(fast, "previous_close", None)
+        info  = {}
+        for _ in range(2):
+            try:
+                info = tk.info or {}
+                if info:
+                    break
+            except Exception:
+                _t.sleep(3)
+
+        rev    = info.get("totalRevenue", 0) or 0
+        shares = (info.get("sharesOutstanding") or
+                  getattr(fast, "shares", 0) or 0)
+        px     = float(price) if price else (info.get("currentPrice") or 0)
+        ccy    = info.get("currency", "USD")
+
+        if not (rev > 0 and shares > 0 and px > 0):
+            return {"error": "Insufficient data (need revenue, shares, current price)"}
+
+        # Project FCF
+        projected_fcf = []
+        r = rev
+        for yr in range(1, years + 1):
+            r = r * (1 + revenue_growth_rate / 100)
+            projected_fcf.append(r * target_fcf_margin / 100)
+
+        # Terminal value on net income
+        terminal_ni    = r * target_profit_margin / 100
+        terminal_value = terminal_ni * terminal_pe
+
+        # Discount all flows
+        dr     = required_return / 100
+        pv_fcf = sum(fcf / (1 + dr) ** (i + 1) for i, fcf in enumerate(projected_fcf))
+        pv_tv  = terminal_value / (1 + dr) ** years
+
+        fvps = (pv_fcf + pv_tv) / shares
+        mos  = (fvps - px) / fvps * 100 if fvps > 0 else 0
+
+        return {
+            "fair_value_bear":   round(fvps * 0.75, 2),
+            "fair_value_base":   round(fvps, 2),
+            "fair_value_bull":   round(fvps * 1.25, 2),
+            "current_price":     round(px, 2),
+            "currency":          ccy,
+            "margin_of_safety":  round(mos, 1),
+            "upside_pct":        round((fvps / px - 1) * 100, 1) if px > 0 else 0,
+            "verdict": (
+                "UNDERVALUED" if mos > 20
+                else "FAIRLY VALUED" if mos > -10
+                else "OVERVALUED"
+            ),
+            "assumptions": {
+                "revenue_growth_rate":  revenue_growth_rate,
+                "target_profit_margin": target_profit_margin,
+                "target_fcf_margin":    target_fcf_margin,
+                "required_return":      required_return,
+                "terminal_pe":          terminal_pe,
+                "years":                years,
+            },
+        }
+    except Exception as e:
+        return {"error": str(e)}

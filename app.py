@@ -77,6 +77,18 @@ SHEETS_AVAILABLE = "gcp_service_account" in st.secrets
 
 if SHEETS_AVAILABLE:
     from core.sheets import read_holdings, append_trades, read_trades
+
+    @st.cache_resource
+    def init_connections():
+        """Pre-warm Google Sheets connection on startup so first tab load is faster."""
+        try:
+            from core.sheets import get_client
+            get_client()
+            return True
+        except Exception:
+            return False
+
+    init_connections()
 else:
     # Offline mode: load from config.py directly (no Google Sheets needed for demo)
     from config import INITIAL_POSITIONS, HKD_USD_RATE
@@ -134,29 +146,21 @@ with st.sidebar:
     )
 
     st.divider()
-    # LSEG enhanced data (Stock Analyzer)
+    # LSEG status (data only fetched via explicit button in Stock Analyzer)
     if lseg_available():
-        _lseg_cols = st.columns([3, 1])
-        with _lseg_cols[0]:
-            use_lseg = st.toggle(
-                "🔬 Enhanced data (LSEG)",
-                value=True,
-                help="Uses LSEG EDP to supplement yfinance fundamentals. "
-                     "Requires Refinitiv Workspace desktop app to be running.",
-            )
-        with _lseg_cols[1]:
-            if st.button("↺", help="Reconnect LSEG and clear cached results"):
-                refresh_lseg()
-                st.cache_data.clear()
-                st.rerun()
-        if use_lseg:
+        _lseg_status_cols = st.columns([3, 1])
+        with _lseg_status_cols[0]:
             if lseg_connected():
                 st.caption("🟢 LSEG connected")
             else:
-                st.caption("🔴 Workspace not open — click ↺ after opening it")
-    else:
-        use_lseg = False
-        st.caption("⚠️ LSEG not configured — add EDP_API_KEY to .env")
+                st.caption("🔴 LSEG: Workspace not open")
+        with _lseg_status_cols[1]:
+            if st.button("↺", key="lseg_reconnect", help="Reconnect LSEG"):
+                refresh_lseg()
+                st.rerun()
+        _lseg_n = st.session_state.get("lseg_calls", 0)
+        if _lseg_n:
+            st.caption(f"LSEG calls this session: {_lseg_n}")
 
     st.divider()
     st.caption(f"Project Apex 2035\nTarget: {ccy_sym}{TARGET_5X_USD:,.0f}\nHK tax: 0% CGT ✓")
@@ -168,7 +172,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────
 # DATA LOAD
 # ─────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def load_data(report_ccy: str):
     holdings_df = read_holdings()
     tickers = tuple(holdings_df["ticker"].tolist())
@@ -1040,41 +1044,69 @@ with tab6:
 # TAB 7 — STOCK ANALYZER
 # ══════════════════════════════════════════════════════════════════
 with tab7:
+    # Session state for persistent results across reruns
+    if "az_result"  not in st.session_state: st.session_state.az_result  = None
+    if "az_ticker"  not in st.session_state: st.session_state.az_ticker  = ""
+    if "az_fv"      not in st.session_state: st.session_state.az_fv      = None
+    if "lseg_calls" not in st.session_state: st.session_state.lseg_calls = 0
+
     st.subheader("📈 Stock Analyzer — 10-Pillar Framework")
-    st.caption(
-        "Analyze any ticker across 10 fundamental pillars. "
-        "Works for US stocks (MSFT, AAPL) and HK stocks (0700.HK, 9988.HK)."
-    )
+    st.caption("Analyze any ticker: MSFT, AAPL (US) or 0700.HK, 9988.HK (HK stocks).")
 
-    _a_col1, _a_col2 = st.columns([3, 1])
-    with _a_col1:
-        _aticker = st.text_input(
-            "Ticker symbol",
-            placeholder="e.g. MSFT, 0700.HK, AAPL, 9988.HK, VOO",
-            key="analyzer_ticker_input",
-        )
-    with _a_col2:
-        st.write("")
-        st.write("")
+    # ── Input + buttons ───────────────────────────────────────────
+    _a1, _a2, _a3 = st.columns([3, 1, 1])
+    with _a1:
+        _aticker = st.text_input("Ticker", placeholder="e.g. MSFT, 0700.HK",
+                                  key="analyzer_ticker_input")
+    with _a2:
+        st.write(""); st.write("")
         _analyze_btn = st.button("🔍 Analyze", type="primary", key="analyze_btn")
+    with _a3:
+        st.write(""); st.write("")
+        _lseg_btn = st.button(
+            "🔬 + LSEG",
+            key="lseg_enhance_btn",
+            disabled=not lseg_available(),
+            help="Fetches from your corporate LSEG account. Use sparingly.",
+        )
 
+    # ── Handle button clicks ──────────────────────────────────────
     if _analyze_btn and _aticker.strip():
-        _ticker_clean = _aticker.strip().upper()
-        # Always clear this ticker's cached result so LSEG data is fresh
+        _tc = _aticker.strip().upper()
         calculate_pillars.clear()
+        with st.spinner(f"Analyzing {_tc} via yfinance… (10–20 s)"):
+            _r = calculate_pillars(_tc, False)
+        st.session_state.az_result = _r
+        st.session_state.az_ticker = _tc
+        st.session_state.az_fv     = None   # reset fair value on new ticker
+    elif _analyze_btn:
+        st.warning("Please enter a ticker symbol.")
 
-        with st.spinner(f"Analyzing {_ticker_clean}… fetching financials (10–20 s)"):
-            _result = calculate_pillars(_ticker_clean, use_lseg)
+    if _lseg_btn:
+        _tc = (_aticker.strip().upper() or st.session_state.az_ticker)
+        if not _tc:
+            st.warning("Enter a ticker first, then click Analyze, then + LSEG.")
+        else:
+            st.warning("⚠️ Using corporate LSEG account — use sparingly.")
+            calculate_pillars.clear()
+            with st.spinner(f"Enhancing {_tc} with LSEG data…"):
+                _r = calculate_pillars(_tc, True)
+            st.session_state.az_result = _r
+            st.session_state.az_ticker = _tc
+            st.session_state.lseg_calls += 1
+            st.success(f"✓ LSEG data loaded  |  Session total: {st.session_state.lseg_calls} call(s)")
 
+    # ── Display (from session state — persists across reruns) ─────
+    _result = st.session_state.az_result
+    _ticker_clean = st.session_state.az_ticker
+
+    if _result:
         if _result.get("error"):
             st.error(f"❌ {_result['error']}")
-            st.caption(
-                "Tips: Check the symbol. HK stocks need .HK suffix (e.g. 0700.HK). "
-                "ETFs return N/A for most fundamental pillars — that is expected."
-            )
+            st.caption("Tips: US stocks: MSFT | HK stocks need .HK suffix: 0700.HK | ETFs show N/A on most pillars.")
         else:
-            # ── Company Header ────────────────────────────────────
-            _info = _result["company_info"]
+            # ── Company header ────────────────────────────────────
+            _info  = _result["company_info"]
             _is_hk = _ticker_clean.endswith(".HK")
             _px_sym = "HK$" if _is_hk else "$"
 
@@ -1082,12 +1114,9 @@ with tab7:
             _h1.metric("Company",    str(_info.get("name", "N/A"))[:30])
             _h2.metric("Sector",     str(_info.get("sector") or "N/A")[:25])
             _mc = _info.get("market_cap")
-            if _mc:
-                _mc_str = (f"${_mc/1e12:.1f}T" if _mc >= 1e12
-                           else f"${_mc/1e9:.1f}B" if _mc >= 1e9
-                           else f"${_mc/1e6:.0f}M")
-            else:
-                _mc_str = "N/A"
+            _mc_str = (f"${_mc/1e12:.1f}T" if _mc and _mc >= 1e12
+                       else f"${_mc/1e9:.1f}B" if _mc and _mc >= 1e9
+                       else f"${_mc/1e6:.0f}M" if _mc else "N/A")
             _h3.metric("Market Cap", _mc_str)
             _px = _info.get("price")
             _h4.metric("Price", f"{_px_sym}{_px:,.2f}" if _px else "N/A")
@@ -1095,13 +1124,11 @@ with tab7:
             _w52h = _info.get("week_52_high")
             _w52l = _info.get("week_52_low")
             if _w52h and _w52l:
-                st.caption(
-                    f"52-week: {_px_sym}{_w52l:,.2f} – {_px_sym}{_w52h:,.2f}  "
-                    f"|  Currency: {_info.get('currency', 'USD')}"
-                )
+                st.caption(f"52-week: {_px_sym}{_w52l:,.2f} – {_px_sym}{_w52h:,.2f}"
+                           f"  |  Currency: {_info.get('currency', 'USD')}")
             st.divider()
 
-            # ── Overall Verdict ───────────────────────────────────
+            # ── Verdict ───────────────────────────────────────────
             _score   = _result["score"]
             _verdict = _result["verdict"]
             _vstyle  = {
@@ -1110,25 +1137,16 @@ with tab7:
                 "EXPENSIVE": ("#f8d7da", "#721c24", "🔴 EXPENSIVE"),
             }
             _vbg, _vtc, _vlabel = _vstyle.get(_verdict, ("#f5f5f5", "#333", f"⚫ {_verdict}"))
-
             _v1, _v2 = st.columns([3, 1])
             with _v1:
                 st.markdown(
-                    f'<div style="background:{_vbg};border-radius:8px;'
-                    f'padding:12px 18px;">'
-                    f'<span style="font-size:1.4em;font-weight:700;'
-                    f'color:{_vtc}">{_vlabel}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-            with _v2:
-                st.metric("Pillars Passing", f"{_score} / 10")
-
+                    f'<div style="background:{_vbg};border-radius:8px;padding:12px 18px;">'
+                    f'<span style="font-size:1.4em;font-weight:700;color:{_vtc}">{_vlabel}</span>'
+                    f'</div>', unsafe_allow_html=True)
+            _v2.metric("Pillars Passing", f"{_score} / 10")
             st.divider()
 
-            # ── 10 Pillars — scored table ─────────────────────────
-            # direction: what makes the number good
-            # threshold: the cutoffs used to assign GREEN/YELLOW/RED
+            # ── 10-Pillar table ───────────────────────────────────
             _PMETA = {
                 1:  ("↓ cheaper vs history",  "🟢 below 5yr avg  🟡 within ±10%  🔴 >10% above avg"),
                 2:  ("↑ higher is better",     "🟢 >15%  🟡 10–15%  🔴 <10%"),
@@ -1142,46 +1160,98 @@ with tab7:
                 10: ("↑ beat the index",       "🟢 outperform >5%  🟡 within ±5%  🔴 trail >5%"),
             }
             _RBADGE = {
-                "GREEN":  ('<span style="background:#d4edda;color:#155724;padding:3px 10px;'
-                           'border-radius:12px;font-weight:700;font-size:12px">✅ PASS</span>'),
-                "YELLOW": ('<span style="background:#fff3cd;color:#856404;padding:3px 10px;'
-                           'border-radius:12px;font-weight:700;font-size:12px">⚠️ FAIR</span>'),
-                "RED":    ('<span style="background:#f8d7da;color:#721c24;padding:3px 10px;'
-                           'border-radius:12px;font-weight:700;font-size:12px">❌ FAIL</span>'),
-                "NA":     ('<span style="background:#e9ecef;color:#6c757d;padding:3px 10px;'
-                           'border-radius:12px;font-size:12px">— N/A</span>'),
+                "GREEN":  '<span style="background:#d4edda;color:#155724;padding:3px 10px;border-radius:12px;font-weight:700;font-size:12px">✅ PASS</span>',
+                "YELLOW": '<span style="background:#fff3cd;color:#856404;padding:3px 10px;border-radius:12px;font-weight:700;font-size:12px">⚠️ FAIR</span>',
+                "RED":    '<span style="background:#f8d7da;color:#721c24;padding:3px 10px;border-radius:12px;font-weight:700;font-size:12px">❌ FAIL</span>',
+                "NA":     '<span style="background:#e9ecef;color:#6c757d;padding:3px 10px;border-radius:12px;font-size:12px">— N/A</span>',
             }
-
-            _tbl_rows = ""
+            _rows = ""
             for _i, _p in enumerate(_result.get("pillars", [])):
                 _n = _p["number"]
-                _meta_dir, _meta_thr = _PMETA.get(_n, ("", ""))
+                _md, _mt = _PMETA.get(_n, ("", ""))
                 _badge = _RBADGE.get(_p["rating"], _RBADGE["NA"])
-                _row_bg = "#fafafa" if _i % 2 == 0 else "#ffffff"
-                _tbl_rows += (
-                    f'<tr style="background:{_row_bg}">'
+                _bg = "#fafafa" if _i % 2 == 0 else "#ffffff"
+                _rows += (
+                    f'<tr style="background:{_bg}">'
                     f'<td style="color:#999;font-size:11px;padding:8px 6px">{_n}</td>'
                     f'<td style="padding:8px 6px;font-weight:600">{_p["name"]}</td>'
                     f'<td style="padding:8px 6px;font-family:monospace;font-size:13px">{_p["value"]}</td>'
                     f'<td style="padding:8px 6px;text-align:center">{_badge}</td>'
-                    f'<td style="padding:8px 6px;color:#555;font-size:12px">{_meta_dir}</td>'
-                    f'<td style="padding:8px 6px;color:#666;font-size:11px">{_meta_thr}</td>'
+                    f'<td style="padding:8px 6px;color:#555;font-size:12px">{_md}</td>'
+                    f'<td style="padding:8px 6px;color:#666;font-size:11px">{_mt}</td>'
                     f'</tr>'
                 )
-
             st.markdown(
-                f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
-                f'<thead><tr style="background:#1F3864;color:white">'
-                f'<th style="padding:8px 6px;width:3%">#</th>'
-                f'<th style="padding:8px 6px;width:17%">Pillar</th>'
-                f'<th style="padding:8px 6px;width:20%">Value</th>'
-                f'<th style="padding:8px 6px;width:9%;text-align:center">Score</th>'
-                f'<th style="padding:8px 6px;width:14%">Direction</th>'
-                f'<th style="padding:8px 6px;width:37%">Thresholds</th>'
-                f'</tr></thead>'
-                f'<tbody>{_tbl_rows}</tbody></table>',
+                '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+                '<thead><tr style="background:#1F3864;color:white">'
+                '<th style="padding:8px 6px;width:3%">#</th>'
+                '<th style="padding:8px 6px;width:17%">Pillar</th>'
+                '<th style="padding:8px 6px;width:20%">Value</th>'
+                '<th style="padding:8px 6px;width:9%;text-align:center">Score</th>'
+                '<th style="padding:8px 6px;width:14%">Direction</th>'
+                '<th style="padding:8px 6px;width:37%">Thresholds</th>'
+                f'</tr></thead><tbody>{_rows}</tbody></table>',
                 unsafe_allow_html=True,
             )
+            st.divider()
+
+            # ── Fair Value Calculator ─────────────────────────────
+            st.subheader("💰 Fair Value Estimator")
+            st.caption("Paul Gabrail / Everything Money DCF methodology. Adjust to match your thesis.")
+
+            with st.expander("⚙️ Set Your Assumptions", expanded=True):
+                _fv1, _fv2, _fv3 = st.columns(3)
+                with _fv1:
+                    _fv_rev_g  = st.slider("Revenue Growth (%/yr)", -5, 50, 10,
+                                            help="Expected annual revenue growth next 5 years")
+                    _fv_pm     = st.slider("Target Profit Margin (%)", 0, 50, 20,
+                                            help="Expected net profit margin at exit")
+                with _fv2:
+                    _fv_fcf_m  = st.slider("FCF Margin (%)", 0, 50, 15,
+                                            help="Free cash flow as % of revenue")
+                    _fv_rr     = st.slider("Required Return (%)", 5, 30, 15,
+                                            help="Your hurdle rate. Higher = more conservative.")
+                with _fv3:
+                    _fv_tpe    = st.slider("Terminal P/E Multiple", 5, 50, 20,
+                                            help="P/E you'd sell at in year N")
+                    _fv_yrs    = st.radio("Projection Years", [3, 5, 10],
+                                           index=1, horizontal=True)
+
+            if st.button("💰 Calculate Fair Value", type="primary", key="fv_btn"):
+                from core.engine import calculate_fair_value
+                with st.spinner("Calculating…"):
+                    _fv = calculate_fair_value(
+                        _ticker_clean, _fv_rev_g, _fv_pm,
+                        _fv_fcf_m, _fv_rr, _fv_tpe, _fv_yrs,
+                    )
+                st.session_state.az_fv = _fv
+
+            _fv = st.session_state.az_fv
+            if _fv:
+                if "error" in _fv:
+                    st.error(f"Could not calculate: {_fv['error']}")
+                else:
+                    _fv_sym = "HK$" if _ticker_clean.endswith(".HK") else "$"
+                    _fc1, _fc2, _fc3, _fc4 = st.columns(4)
+                    _fc1.metric("Bear Case",  f"{_fv_sym}{_fv['fair_value_bear']:,.2f}")
+                    _fc2.metric("Base Case",  f"{_fv_sym}{_fv['fair_value_base']:,.2f}",
+                                delta=f"{_fv['upside_pct']:+.1f}% vs current")
+                    _fc3.metric("Bull Case",  f"{_fv_sym}{_fv['fair_value_bull']:,.2f}")
+                    _fc4.metric("Margin of Safety", f"{_fv['margin_of_safety']:+.1f}%",
+                                help=">20% is a good entry margin of safety")
+
+                    _fvv = _fv["verdict"]
+                    _fv_color = {"UNDERVALUED": "green", "FAIRLY VALUED": "orange",
+                                  "OVERVALUED": "red"}.get(_fvv, "gray")
+                    st.markdown(f"### :{_fv_color}[{_fvv}]")
+                    st.caption(
+                        f"Current: {_fv_sym}{_fv['current_price']:,.2f}  |  "
+                        f"Bear: {_fv_sym}{_fv['fair_value_bear']:,.2f}  |  "
+                        f"Base: {_fv_sym}{_fv['fair_value_base']:,.2f}  |  "
+                        f"Bull: {_fv_sym}{_fv['fair_value_bull']:,.2f}"
+                    )
+                    st.info("💡 These are YOUR assumptions, not analyst consensus. "
+                            "Higher required return = more conservative = larger margin of safety.")
 
             st.divider()
 
@@ -1192,38 +1262,23 @@ with tab7:
                     if st.button("📌 Add to Watchlist", key="add_watchlist_btn"):
                         from core.sheets import append_watchlist
                         _wl_res = append_watchlist(
-                            _ticker_clean,
-                            _info.get("price"),
-                            _score,
-                            _verdict,
-                        )
+                            _ticker_clean, _info.get("price"), _score, _verdict)
                         if _wl_res is True:
-                            st.success(
-                                f"✅ {_ticker_clean} added to Watchlist "
-                                f"in Google Sheets!"
-                            )
+                            st.success(f"✅ {_ticker_clean} added to Watchlist!")
                         else:
                             st.error(f"Watchlist error: {_wl_res}")
                 else:
-                    st.caption(
-                        "⚠️ Connect Google Sheets to use the watchlist feature."
-                    )
+                    st.caption("⚠️ Connect Google Sheets to use watchlist.")
 
             with _pdf_col:
                 if st.button("📄 Generate Stock PDF", key="stock_pdf_btn"):
                     with st.spinner("Generating PDF…"):
-                        _spdf = export_stock_pdf(_ticker_clean, _result)
+                        _spdf = export_stock_pdf(
+                            _ticker_clean, _result, st.session_state.az_fv)
                     st.download_button(
-                        "⬇️ Download Stock PDF",
-                        _spdf,
-                        f"apex2035_stock_{_ticker_clean}_"
-                        f"{datetime.date.today().strftime('%Y%m%d')}.pdf",
-                        "application/pdf",
-                        key="dl_stock_pdf",
-                    )
-
-    elif _analyze_btn:
-        st.warning("Please enter a ticker symbol.")
+                        "⬇️ Download Stock PDF", _spdf,
+                        f"apex2035_stock_{_ticker_clean}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                        "application/pdf", key="dl_stock_pdf")
 
 
 # ══════════════════════════════════════════════════════════════════

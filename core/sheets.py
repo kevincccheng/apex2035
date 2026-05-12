@@ -53,8 +53,9 @@ HOLDINGS_COLS = [
     "last_updated",
 ]
 
+@st.cache_data(ttl=300)
 def read_holdings() -> pd.DataFrame:
-    """Read Holdings_Master sheet → DataFrame."""
+    """Read Holdings_Master sheet → DataFrame. Cached 5 min."""
     ws = get_sheet(SHEET_HOLDINGS)
     data = ws.get_all_records()
     if not data:
@@ -116,6 +117,7 @@ TRADES_COLS = [
     "uploaded_at",
 ]
 
+@st.cache_data(ttl=300)
 def read_trades() -> pd.DataFrame:
     ws = get_sheet(SHEET_TRADES)
     data = ws.get_all_records()
